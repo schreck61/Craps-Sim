@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jim Schreckengast
 // SPDX-License-Identifier: MIT
 
-//! Craps Table Simulator — GUI, simulation orchestration, and the strategy
+//! Craps-Sim — GUI, simulation orchestration, and the strategy
 //! explorer. The game engine itself lives in [`sim`].
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -27,7 +27,7 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native(
-        "Craps Table Simulator",
+        "Craps-Sim",
         options,
         Box::new(|_cc| Ok(Box::new(App::default()))),
     )

@@ -2,7 +2,7 @@
 
 ## Scope
 
-Craps Table Simulator is a fully offline desktop application. It:
+Craps-Sim is a fully offline desktop application. It:
 
 - makes **no network connections** of any kind,
 - reads and writes **no files** (settings are not persisted),

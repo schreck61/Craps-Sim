@@ -1,4 +1,4 @@
-# Craps Table Simulator
+# Craps-Sim
 
 A massively parallel Monte Carlo craps simulator with a native GUI. Configure
 a player — bets, bet-pressing progression, budget, quit rule, and house payout
@@ -60,12 +60,12 @@ draws a fresh seed, so repeated runs give independent samples.
 ## Installing
 
 Download the archive for your platform from the
-[Releases](https://github.com/jschreckengast/craps_table/releases) page
+[Releases](https://github.com/schreck61/Craps-Sim/releases) page
 (Windows x86_64, macOS Apple Silicon, Linux x86_64), unpack it, and run the
-`craps_table` binary.
+`craps-sim` binary.
 
 > macOS note: release binaries are not code-signed. The first launch may
-> require right-click → Open, or `xattr -d com.apple.quarantine craps_table`.
+> require right-click → Open, or `xattr -d com.apple.quarantine craps-sim`.
 
 ## Building from source
 

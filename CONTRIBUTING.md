@@ -1,4 +1,4 @@
-# Contributing to Craps Table Simulator
+# Contributing to Craps-Sim
 
 Thanks for your interest in contributing! This project welcomes bug reports,
 feature requests, and pull requests.
@@ -9,8 +9,8 @@ You need a recent stable Rust toolchain (see `rust-version` in `Cargo.toml`
 for the minimum supported version).
 
 ```bash
-git clone https://github.com/jschreckengast/craps_table.git
-cd craps_table
+git clone https://github.com/schreck61/Craps-Sim.git
+cd Craps-Sim
 cargo run --release
 ```
 

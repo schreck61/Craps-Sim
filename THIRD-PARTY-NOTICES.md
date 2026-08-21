@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-Craps Table Simulator is licensed under the MIT License (see `LICENSE`).
+Craps-Sim is licensed under the MIT License (see `LICENSE`).
 Distributed binaries additionally embed the following third-party fonts via
 the [egui](https://github.com/emilk/egui) GUI library's default font set
 (`epaint_default_fonts`). Their license texts are included in the
