@@ -114,10 +114,13 @@ def is_missing(text):
 
 def main():
     out_path = sys.argv[1] if len(sys.argv) > 1 else "THIRD-PARTY-LICENSES.md"
+    # encoding is explicit: Windows would otherwise decode with the legacy
+    # locale codepage, which cannot represent all bytes in license texts.
     raw = subprocess.run(
         ["cargo", "bundle-licenses", "--format", "json"],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         check=True,
     ).stdout
     libs = json.loads(raw)["third_party_libraries"]
@@ -211,7 +214,7 @@ def main():
                     f"Full text: https://spdx.org/licenses/{lid}.html\n"
                 )
 
-    with open(out_path, "w") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(out))
     print(
         f"wrote {out_path}: {len(libs)} crates, {len(texts)} distinct texts, "
