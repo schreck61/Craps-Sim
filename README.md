@@ -151,3 +151,5 @@ MIT — see [LICENSE](LICENSE).
 ## Author
 
 Jim Schreckengast
+
+(with AI assistance)
