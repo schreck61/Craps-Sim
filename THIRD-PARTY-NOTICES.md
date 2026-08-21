@@ -15,6 +15,13 @@ the [egui](https://github.com/emilk/egui) GUI library's default font set
 
 All Rust crate dependencies are used under permissive licenses
 (MIT, Apache-2.0, BSD, Zlib, ISC, Unicode-3.0, BSL-1.0, or Unlicense,
-individually or as dual/multi-license choices). Run
-`cargo metadata --format-version 1` on the locked dependency set for the
-complete inventory.
+individually or as dual/multi-license choices). Every release archive
+includes `THIRD-PARTY-LICENSES.md`, a complete per-crate attribution file —
+each compiled-in crate with its version, license, and license text —
+generated for that platform's exact dependency set by
+`tools/generate_attributions.py`. To reproduce it from source:
+
+```bash
+cargo install cargo-bundle-licenses --locked
+python3 tools/generate_attributions.py
+```

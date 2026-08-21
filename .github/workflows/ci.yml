@@ -35,6 +35,11 @@ jobs:
         run: cargo fmt --check
       - name: clippy
         run: cargo clippy --locked --all-targets --release -- -D warnings
+      - name: Attribution generator smoke test
+        run: |
+          cargo install cargo-bundle-licenses --locked
+          python3 tools/generate_attributions.py /tmp/THIRD-PARTY-LICENSES.md
+          test -s /tmp/THIRD-PARTY-LICENSES.md
 
   test:
     name: Test (${{ matrix.os }})

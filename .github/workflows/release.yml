@@ -63,6 +63,12 @@ jobs:
       - name: Build release binary
         run: cargo build --locked --release --target ${{ matrix.target }}
 
+      - name: Generate third-party attributions
+        shell: bash
+        run: |
+          cargo install cargo-bundle-licenses --locked
+          python3 tools/generate_attributions.py THIRD-PARTY-LICENSES.md
+
       - name: Package (tar.gz)
         if: matrix.archive == 'tar'
         shell: bash
@@ -70,7 +76,7 @@ jobs:
           STAGE="${APP_NAME}-${GITHUB_REF_NAME}-${{ matrix.label }}"
           mkdir "$STAGE"
           cp "target/${{ matrix.target }}/release/${APP_NAME}" "$STAGE/"
-          cp LICENSE README.md THIRD-PARTY-NOTICES.md "$STAGE/"
+          cp LICENSE README.md THIRD-PARTY-NOTICES.md THIRD-PARTY-LICENSES.md "$STAGE/"
           cp -R licenses "$STAGE/licenses"
           tar czf "$STAGE.tar.gz" "$STAGE"
           echo "ASSET=$STAGE.tar.gz" >> "$GITHUB_ENV"
@@ -82,7 +88,7 @@ jobs:
           $stage = "$env:APP_NAME-$env:GITHUB_REF_NAME-${{ matrix.label }}"
           New-Item -ItemType Directory -Path $stage | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/$env:APP_NAME.exe" $stage
-          Copy-Item LICENSE, README.md, THIRD-PARTY-NOTICES.md $stage
+          Copy-Item LICENSE, README.md, THIRD-PARTY-NOTICES.md, THIRD-PARTY-LICENSES.md $stage
           Copy-Item -Recurse licenses "$stage/licenses"
           Compress-Archive -Path $stage -DestinationPath "$stage.zip"
           Add-Content -Path $env:GITHUB_ENV -Value "ASSET=$stage.zip"
