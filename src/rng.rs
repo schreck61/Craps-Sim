@@ -3,6 +3,21 @@
 
 //! Small, fast, self-contained PRNG (xoshiro256++), seeded via SplitMix64.
 //! Deterministic per seed, so every session is reproducible from its index.
+//!
+//! This is a Rust translation of two published algorithms by David Blackman
+//! and Sebastiano Vigna:
+//!
+//! * **xoshiro256++ 1.0** — Blackman & Vigna, "Scrambled Linear
+//!   Pseudorandom Number Generators", ACM Transactions on Mathematical
+//!   Software, 2021.
+//! * **SplitMix64** — Vigna's recommended seed expander for initializing
+//!   xoshiro state from a single 64-bit seed.
+//!
+//! The authors' reference C implementations, from which this translation
+//! was made, are dedicated to the public domain under CC0 1.0
+//! (<https://prng.di.unimi.it/>). Not cryptographically secure — chosen for
+//! statistical quality (passes BigCrush/PractRand), speed, and a 2^256 − 1
+//! period, which is all a dice simulation needs.
 
 pub struct Xoshiro256pp {
     s: [u64; 4],

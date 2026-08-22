@@ -1,6 +1,15 @@
 # Third-Party Notices
 
 Craps-Sim is licensed under the MIT License (see `LICENSE`).
+
+## Algorithms
+
+The simulation's random number generator (`src/rng.rs`) is a Rust
+translation of the **xoshiro256++** generator and the **SplitMix64** seed
+expander by David Blackman and Sebastiano Vigna. The authors' reference C
+implementations are dedicated to the public domain under CC0 1.0; see
+<https://prng.di.unimi.it/> and Blackman & Vigna, "Scrambled Linear
+Pseudorandom Number Generators", ACM TOMS 2021.
 Distributed binaries additionally embed the following third-party fonts via
 the [egui](https://github.com/emilk/egui) GUI library's default font set
 (`epaint_default_fonts`). Their license texts are included in the
