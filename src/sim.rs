@@ -1825,6 +1825,95 @@ mod tests {
         assert_eq!(s.cash, 100_000 + 1000 - s.pass);
     }
 
+    /// Roll-by-roll trace of one session — a readable ledger of placements,
+    /// resolutions, and the running bankroll. Run with:
+    ///   cargo test --release -- --ignored trace_session --nocapture
+    #[test]
+    #[ignore]
+    fn trace_session() {
+        let seeds: Vec<u64> = std::env::var("TRACE_SEEDS")
+            .ok()
+            .map(|v| v.split(',').filter_map(|t| t.parse().ok()).collect())
+            .unwrap_or_else(|| vec![11]);
+        let sel = only(|s| {
+            s.pass_line = true;
+            s.come_max = 2;
+            s.take_odds = true;
+            s.progression = Progression::DAlembert;
+        });
+        let r = Rules {
+            odds_policy: OddsPolicy::X345,
+            field_12_triple: false,
+            come_odds_work_on_comeout: false,
+            prop_bet_cents: 500,
+            table_max_mult: 500,
+        };
+        let min = 10_000i64; // $100 table
+        let budget = 100_000i64; // $1,000
+        let target = budget * 2;
+        for seed in seeds {
+            println!();
+            println!("=== seed {seed}: $100 table, $1,000 budget, 3-pt Molly + 3-4-5x odds, D'Alembert, quit at $2,000 ===");
+            println!(
+                "{:>4} {:>6} {:>7} {:>9} {:>9} {:>9} {:>9}  {}",
+                "roll",
+                "dice",
+                "point",
+                "placed",
+                "resolved",
+                "cash",
+                "total",
+                "next flat (pass/come)"
+            );
+            let mut rng = Xoshiro256pp::seed_from_u64(seed);
+            let mut s = Session::new(&sel, &r, min, budget, false);
+            let cheapest = s.cheapest_selected_stake();
+            for roll in 1..=400u32 {
+                let cash_before = s.cash;
+                if s.needs_placement || s.one_roll_selected {
+                    s.place_bets();
+                }
+                let placed = cash_before - s.cash;
+                if !s.has_multi_roll_bets() && !s.has_one_roll_bets() && s.cash < cheapest {
+                    println!(
+                        "     BUSTED with ${} in hand after {} rolls",
+                        s.cash / 100,
+                        roll - 1
+                    );
+                    break;
+                }
+                let pre_wealth = s.cash + s.on_table_face();
+                let (d1, d2) = rng.dice();
+                s.resolve(d1, d2);
+                let wealth = s.cash + s.on_table_face();
+                let point = match s.point {
+                    Some(p) => format!("on {p}"),
+                    None => "off".to_owned(),
+                };
+                println!(
+                    "{:>4} {:>6} {:>7} {:>9} {:>9} {:>9} {:>9}  ${}/{}",
+                    roll,
+                    format!("{d1}+{d2}={}", d1 + d2),
+                    point,
+                    format!("${}", placed / 100),
+                    format!("{:+}", (wealth - pre_wealth) / 100),
+                    format!("${}", s.cash / 100),
+                    format!("${}", wealth / 100),
+                    s.p_pass.stake / 100,
+                    s.p_come.stake / 100,
+                );
+                if wealth >= target {
+                    println!(
+                        "     QUIT AHEAD with ${} total after {} rolls",
+                        wealth / 100,
+                        roll
+                    );
+                    break;
+                }
+            }
+        }
+    }
+
     /// Verbatim copy of the pre-merge `run_ruin_session` loop, kept as the
     /// behavioral reference for the merged `run_session`.
     fn reference_ruin_session(
