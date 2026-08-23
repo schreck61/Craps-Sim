@@ -341,6 +341,12 @@ fn parse_table_mins(text: &str) -> Result<Vec<i64>, String> {
     Ok(mins)
 }
 
+/// A probability cell with its 95% confidence half-width, e.g. "46.8 ±1.4%".
+fn pct_ci(p: f64, sessions: u32) -> String {
+    let half = 1.96 * (p * (1.0 - p) / sessions.max(1) as f64).sqrt();
+    format!("{:.1} ±{:.1}%", p * 100.0, half * 100.0)
+}
+
 fn dollars(cents: i64) -> String {
     if cents % 100 == 0 {
         format!("${}", cents / 100)
@@ -1270,14 +1276,22 @@ impl App {
     fn explore_results_ui(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
         ui.heading("Strategy Explorer");
-        let (budget_dollars, hours, rph) = match &self.result_params {
-            Some(p) => (p.budget_dollars, p.target_hours, p.rolls_per_hour as f64),
+        let (budget_dollars, hours, rph, sessions) = match &self.result_params {
+            Some(p) => (
+                p.budget_dollars,
+                p.target_hours,
+                p.rolls_per_hour as f64,
+                p.sessions,
+            ),
             None => return,
         };
         ui.label(format!(
             "Best strategy / pressing / quit combos for a ${budget_dollars:.0} budget over {hours:.1} hours. \
              \"Walk-out\" money counts early quits and busts at their ending value."
         ));
+        ui.small(
+            "Rows whose intervals overlap are statistically tied — raise sessions per combo to separate them.",
+        );
         if self.last_cancelled && self.running.is_none() {
             ui.colored_label(
                 ui.visuals().warn_fg_color,
@@ -1348,9 +1362,9 @@ impl App {
                         ui.label(best.strategy);
                         ui.label(best.progression);
                         ui.label(quit_label(best.quit));
-                        ui.label(format!("{:.1}%", best.p_double * 100.0));
-                        ui.label(format!("{:.1}%", best.p_ahead * 100.0));
-                        ui.label(format!("{:.1}%", best.p_nobust * 100.0));
+                        ui.label(pct_ci(best.p_double, sessions));
+                        ui.label(pct_ci(best.p_ahead, sessions));
+                        ui.label(pct_ci(best.p_nobust, sessions));
                         ui.label(dollars(best.median_final));
                         ui.label(format!("${:.0}", best.mean_final / 100.0));
                         ui.label(format!("{:.1}", best.median_rolls as f64 / rph));
@@ -1400,9 +1414,9 @@ impl App {
                                 ui.label(r.strategy);
                                 ui.label(r.progression);
                                 ui.label(quit_label(r.quit));
-                                ui.label(format!("{:.1}%", r.p_double * 100.0));
-                                ui.label(format!("{:.1}%", r.p_ahead * 100.0));
-                                ui.label(format!("{:.1}%", r.p_nobust * 100.0));
+                                ui.label(pct_ci(r.p_double, sessions));
+                                ui.label(pct_ci(r.p_ahead, sessions));
+                                ui.label(pct_ci(r.p_nobust, sessions));
                                 ui.label(dollars(r.median_final));
                                 ui.label(format!("${:.0}", r.mean_final / 100.0));
                                 ui.label(format!("{:.1}", r.median_rolls as f64 / rph));
@@ -1460,5 +1474,100 @@ mod tests {
         sel.set_place(8, true);
         let s = bets_summary(&sel, OddsPolicy::X345);
         assert_eq!(s, "Pass, Come×2, odds (3-4-5x odds), Place 6/8");
+    }
+
+    /// Investigation harness: near-ground-truth explorer leaderboard for a
+    /// $1,000 budget at low table minimums, plus rank-churn analysis at the
+    /// default explorer precision. Run with:
+    ///   cargo test --release -- --ignored explorer_ --nocapture
+    #[test]
+    #[ignore]
+    fn explorer_ground_truth_1000_budget() {
+        use rayon::prelude::*;
+        let rules = Rules {
+            odds_policy: OddsPolicy::X345,
+            field_12_triple: false,
+            come_odds_work_on_comeout: false,
+            prop_bet_cents: 500,
+            table_max_mult: 500,
+        };
+        let budget = 100_000i64; // $1,000
+        let horizon = 400u64;
+        let strategies = explore_strategies();
+
+        let leaderboard = |min: i64, sessions: u64, base_seed: u64| -> Vec<(String, f64)> {
+            let mut rows = Vec::new();
+            for (sname, sel_base) in &strategies {
+                for prog in Progression::ALL {
+                    let mut sel = sel_base.clone();
+                    sel.progression = prog;
+                    for quit in EXPLORE_QUITS {
+                        let quit_cents =
+                            quit.map(|m| ((budget as f64 * m).round() as i64).max(budget + 100));
+                        let doubles = (0..sessions)
+                            .into_par_iter()
+                            .filter(|&i| {
+                                sim::run_horizon_session(
+                                    &sel,
+                                    &rules,
+                                    min,
+                                    budget,
+                                    quit_cents,
+                                    horizon,
+                                    base_seed ^ ((min as u64) << 40) ^ i,
+                                )
+                                .final_cents
+                                    >= budget * 2
+                            })
+                            .count();
+                        let q = match quit {
+                            Some(m) => format!("quit {m:.1}x"),
+                            None => "no quit".to_owned(),
+                        };
+                        rows.push((
+                            format!("{sname} | {} | {q}", prog.label()),
+                            doubles as f64 / sessions as f64,
+                        ));
+                    }
+                }
+            }
+            rows.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+            rows
+        };
+
+        for &min in &[500i64, 1000, 1500] {
+            let sessions = 50_000u64;
+            let rows = leaderboard(min, sessions, 0xC0FFEE);
+            println!(
+                "=== ${} min, {}k sessions/combo (ground truth) ===",
+                min / 100,
+                sessions / 1000
+            );
+            for (k, (name, p)) in rows.iter().take(8).enumerate() {
+                let se = (p * (1.0 - p) / sessions as f64).sqrt();
+                println!(
+                    "  {}. {:5.2}% +-{:.2}%  {}",
+                    k + 1,
+                    p * 100.0,
+                    se * 100.0,
+                    name
+                );
+            }
+        }
+
+        println!();
+        println!("=== $5 min, default 5k sessions, five independent runs (rank churn) ===");
+        for run in 0..5u64 {
+            let rows = leaderboard(500, 5_000, 0x1111_2222 ^ (run << 48));
+            let top: Vec<String> = rows
+                .iter()
+                .take(3)
+                .map(|(n, p)| format!("{n} ({:.1}%)", p * 100.0))
+                .collect();
+            println!("  run {}:", run + 1);
+            for t in top {
+                println!("     {t}");
+            }
+        }
     }
 }

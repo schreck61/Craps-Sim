@@ -159,3 +159,37 @@ mod tests {
         assert!(!same, "different seeds produced identical streams");
     }
 }
+
+#[cfg(test)]
+mod deep_tests {
+    use super::*;
+
+    #[test]
+    #[ignore] // investigation-grade: cargo test --release -- --ignored
+    fn consecutive_dice_pairs_are_jointly_independent() {
+        // Joint chi-square over all 36x36 consecutive-pair combinations —
+        // catches within-word correlations the lag-1 totals test could miss.
+        // 1295 degrees of freedom: mean 1295, sd ~50.9; 1650 is ~7 sigma.
+        let mut rng = Xoshiro256pp::seed_from_u64(4242);
+        let n = 12_960_000u64; // 10k expected per cell
+        let mut cells = vec![0u64; 36 * 36];
+        let (d1, d2) = rng.dice();
+        let mut prev = ((d1 - 1) * 6 + (d2 - 1)) as usize;
+        for _ in 0..n {
+            let (d1, d2) = rng.dice();
+            let cur = ((d1 - 1) * 6 + (d2 - 1)) as usize;
+            cells[prev * 36 + cur] += 1;
+            prev = cur;
+        }
+        let expected = n as f64 / 1296.0;
+        let chi2: f64 = cells
+            .iter()
+            .map(|&c| {
+                let d = c as f64 - expected;
+                d * d / expected
+            })
+            .sum();
+        println!("joint chi2 = {chi2:.1} (df=1295, mean 1295, sd 50.9)");
+        assert!(chi2 < 1650.0, "joint chi-square was {chi2:.1}");
+    }
+}
