@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The strategy explorer uses common random numbers: every combo plays the
   same dice sequences per table minimum, so head-to-head rankings are much
   tighter at the same session count.
+- The pre-roll placement pass is skipped on rolls that resolved nothing —
+  placement only reruns after a resolution changes cash, bets, or the
+  point. Proven equivalent against always-place reference implementations.
+- Dice pairs are batch-sampled ten 6-bit chunks at a time from each
+  generator output (rejection-mapped onto the 36 outcomes), cutting RNG
+  calls roughly 2.5x. New statistical tests (chi-square uniformity, serial
+  correlation) verify the sampler; dice sequences per seed differ from
+  earlier versions, so individual run numbers shift within their
+  confidence intervals.
 
 ## [0.1.0] - 2026-08-21
 

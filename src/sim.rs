@@ -447,6 +447,12 @@ struct Session<'a> {
     field_bet: i64,
     any7_bet: i64,
     anycraps_bet: i64,
+    /// Set by any resolution that changes cash, bets, or the point — the
+    /// only inputs `place_bets` reads. While clear, `place_bets` would be a
+    /// no-op, so the pre-roll placement pass can be skipped entirely
+    /// (except that one-roll bets always need re-placing).
+    needs_placement: bool,
+    one_roll_selected: bool,
     // Progression state, one stream per bet type. Come and don't come flats
     // share one stream each (the press applies to the next flat made).
     table_max: i64,
@@ -495,6 +501,8 @@ impl<'a> Session<'a> {
             field_bet: 0,
             any7_bet: 0,
             anycraps_bet: 0,
+            needs_placement: true,
+            one_roll_selected: sel.field || sel.any_seven || sel.any_craps,
             table_max: min.saturating_mul(rules.table_max_mult.max(1)),
             p_pass: ProgState::new(min),
             p_dont: ProgState::new(min),
@@ -748,6 +756,9 @@ impl<'a> Session<'a> {
                 self.anycraps_bet = a;
             }
         }
+        // Placement is a pure function of cash, bets, and the point; until a
+        // resolution changes one of those, running it again is a no-op.
+        self.needs_placement = false;
     }
 
     /// Resolve come and don't come bets for a roll of `t`. `was_comeout` is
@@ -761,6 +772,7 @@ impl<'a> Session<'a> {
         if t == 7 {
             for i in 0..6 {
                 if self.come_points[i] > 0 {
+                    self.needs_placement = true;
                     prog.on_loss(&mut self.p_come, self.min, self.come_points[i]);
                     self.come_points[i] = 0;
                     if self.come_odds[i] > 0 {
@@ -771,6 +783,7 @@ impl<'a> Session<'a> {
                     }
                 }
                 if self.dc_points[i] > 0 {
+                    self.needs_placement = true;
                     // Don't come wins: flat even money plus the lay.
                     self.cash += self.dc_points[i] * 2 + self.dc_lay[i] + self.dc_lay_win[i];
                     prog.on_win(&mut self.p_dc, self.min, self.dc_points[i]);
@@ -781,6 +794,7 @@ impl<'a> Session<'a> {
             }
         } else if let Some(i) = place_index(t) {
             if self.come_points[i] > 0 {
+                self.needs_placement = true;
                 // Come point made: flat wins even money, bet comes down.
                 self.cash += self.come_points[i] * 2;
                 prog.on_win(&mut self.p_come, self.min, self.come_points[i]);
@@ -795,6 +809,7 @@ impl<'a> Session<'a> {
                 }
             }
             if self.dc_points[i] > 0 {
+                self.needs_placement = true;
                 // Number repeated: don't come loses flat and lay.
                 prog.on_loss(&mut self.p_dc, self.min, self.dc_points[i]);
                 self.dc_points[i] = 0;
@@ -805,6 +820,7 @@ impl<'a> Session<'a> {
 
         // A flat in the come box has its own come-out on this roll.
         if self.come_flat > 0 {
+            self.needs_placement = true;
             match t {
                 7 | 11 => {
                     self.cash += self.come_flat * 2;
@@ -824,6 +840,7 @@ impl<'a> Session<'a> {
             }
         }
         if self.dc_flat > 0 {
+            self.needs_placement = true;
             match t {
                 2 | 3 => {
                     self.cash += self.dc_flat * 2;
@@ -854,6 +871,7 @@ impl<'a> Session<'a> {
         // --- One-roll bets ---
         let prog = self.sel.progression;
         if self.field_bet > 0 {
+            self.needs_placement = true;
             let b = self.field_bet;
             self.field_bet = 0;
             let win_mult = match t {
@@ -876,6 +894,7 @@ impl<'a> Session<'a> {
             }
         }
         if self.any7_bet > 0 {
+            self.needs_placement = true;
             let b = self.any7_bet;
             self.any7_bet = 0;
             if t == 7 {
@@ -886,6 +905,7 @@ impl<'a> Session<'a> {
             }
         }
         if self.anycraps_bet > 0 {
+            self.needs_placement = true;
             let b = self.anycraps_bet;
             self.anycraps_bet = 0;
             if t == 2 || t == 3 || t == 12 {
@@ -899,6 +919,7 @@ impl<'a> Session<'a> {
         match self.point {
             None => {
                 // --- Come-out roll. Place bets & hardways are off. ---
+                self.needs_placement = true;
                 match t {
                     7 | 11 => {
                         if self.pass > 0 {
@@ -937,6 +958,7 @@ impl<'a> Session<'a> {
             Some(point) => {
                 if t == 7 {
                     // --- Seven-out ---
+                    self.needs_placement = true;
                     if self.pass > 0 {
                         prog.on_loss(&mut self.p_pass, self.min, self.pass);
                         self.pass = 0;
@@ -979,6 +1001,7 @@ impl<'a> Session<'a> {
                 // in place out of (or back into) the player's rail.
                 if let Some(i) = place_index(t) {
                     if self.place[i] > 0 {
+                        self.needs_placement = true;
                         self.cash += place_win(self.place[i], t);
                         let base = place_stake(self.min, t);
                         prog.on_win(&mut self.p_place[i], base, place_win(self.place[i], t));
@@ -997,6 +1020,7 @@ impl<'a> Session<'a> {
                 // Hardways: winners stay up, pressed the same way.
                 if let Some(i) = hard_index(t) {
                     if self.hard[i] > 0 {
+                        self.needs_placement = true;
                         let base = self.rules.prop_bet_cents;
                         if is_hard {
                             self.cash += hardway_win(self.hard[i], t);
@@ -1020,6 +1044,7 @@ impl<'a> Session<'a> {
 
                 if t == point {
                     // --- Point made ---
+                    self.needs_placement = true;
                     if self.pass > 0 {
                         self.cash += self.pass * 2;
                         prog.on_win(&mut self.p_pass, self.min, self.pass);
@@ -1101,7 +1126,9 @@ pub fn run_session(
     let mut ruin: Option<RuinOutcome> = None;
     let mut horizon: Option<HorizonOutcome> = None;
     loop {
-        s.place_bets();
+        if s.needs_placement || s.one_roll_selected {
+            s.place_bets();
+        }
         if !s.has_multi_roll_bets() && !s.has_one_roll_bets() && s.cash < cheapest {
             return SessionOutcomes {
                 ruin: ruin.unwrap_or(RuinOutcome {
@@ -1117,7 +1144,7 @@ pub fn run_session(
                 }),
             };
         }
-        let (d1, d2) = (rng.die(), rng.die());
+        let (d1, d2) = rng.dice();
         rolls += 1;
         s.resolve(d1, d2);
         if let Some(target) = quit_target_cents {
@@ -1234,8 +1261,10 @@ pub fn run_drawdown_session(
     let mut rng = Xoshiro256pp::seed_from_u64(seed);
     let mut s = Session::new(sel, rules, table_min_cents, 0, true);
     for _ in 0..horizon_rolls {
-        s.place_bets();
-        let (d1, d2) = (rng.die(), rng.die());
+        if s.needs_placement || s.one_roll_selected {
+            s.place_bets();
+        }
+        let (d1, d2) = rng.dice();
         s.resolve(d1, d2);
     }
     s.max_outlay
@@ -1394,7 +1423,7 @@ mod tests {
             let before = s.cash;
             s.place_bets();
             wagered += before - s.cash;
-            let (d1, d2) = (rng.die(), rng.die());
+            let (d1, d2) = rng.dice();
             s.resolve(d1, d2);
         }
         // Settle: money still on the table is not lost; add it back at face value
@@ -1728,12 +1757,25 @@ mod tests {
     #[test]
     fn martingale_does_not_change_house_edge() {
         // Progressions change variance, not the edge per dollar wagered.
+        // The wager-weighted estimator is dominated by rare deep-doubling
+        // streaks, so it converges far slower than the flat-bet edge tests:
+        // bound the tail with a realistic table max and average over seeds.
         let sel = only(|s| {
             s.pass_line = true;
             s.progression = Progression::Martingale;
         });
-        let (net, wagered) = grind(&sel, &rules(), 4_000_000);
-        let edge = -net / wagered;
+        let r = Rules {
+            table_max_mult: 50,
+            ..rules()
+        };
+        let mut net_sum = 0.0;
+        let mut wagered_sum = 0.0;
+        for seed in 0..8u64 {
+            let (net, wagered) = grind_seeded(&sel, &r, 2_000_000, 500 + seed);
+            net_sum += net;
+            wagered_sum += wagered;
+        }
+        let edge = -net_sum / wagered_sum;
         assert!((edge - 0.01414).abs() < 0.005, "edge was {edge}");
     }
 
@@ -1782,7 +1824,7 @@ mod tests {
                     hit_target: false,
                 };
             }
-            let (d1, d2) = (rng.die(), rng.die());
+            let (d1, d2) = rng.dice();
             rolls += 1;
             s.resolve(d1, d2);
             if let Some(target) = quit_target_cents {
@@ -1828,7 +1870,7 @@ mod tests {
                     rolls,
                 };
             }
-            let (d1, d2) = (rng.die(), rng.die());
+            let (d1, d2) = rng.dice();
             rolls += 1;
             s.resolve(d1, d2);
             if let Some(target) = quit_target_cents {
