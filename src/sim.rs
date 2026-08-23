@@ -1613,6 +1613,31 @@ mod tests {
     }
 
     #[test]
+    fn molly_combined_edge_matches_closed_form() {
+        // The 3-pt Molly is three simultaneous pass-equivalent bets, so its
+        // per-dollar edge equals the pass + 3-4-5x odds closed form:
+        // (7/495) / (34/9) = 0.3743% of total money wagered.
+        let sel = only(|s| {
+            s.pass_line = true;
+            s.come_max = 2;
+            s.take_odds = true;
+        });
+        let r = Rules {
+            odds_policy: OddsPolicy::X345,
+            ..rules()
+        };
+        let mut net_sum = 0.0;
+        let mut wagered_sum = 0.0;
+        for seed in 0..8u64 {
+            let (net, wagered) = grind_seeded(&sel, &r, 2_000_000, 9_000 + seed);
+            net_sum += net;
+            wagered_sum += wagered;
+        }
+        let edge = -net_sum / wagered_sum;
+        assert!((edge - 0.003743).abs() < 0.0025, "edge was {edge}");
+    }
+
+    #[test]
     fn payout_exactness() {
         // Deterministic check of core payouts via direct resolution.
         let sel = only(|s| s.pass_line = true);
