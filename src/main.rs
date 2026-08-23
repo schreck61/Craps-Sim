@@ -205,6 +205,7 @@ struct App {
     table_max_mult: i64,
     // --- explorer ---
     explore_sessions: u32,
+    explore_flat_only: bool,
     rank_by: RankBy,
     // --- run state ---
     running: Option<RunHandle>,
@@ -253,6 +254,7 @@ impl Default for App {
             prop_bet_dollars: 5.0,
             table_max_mult: 500,
             explore_sessions: 5_000,
+            explore_flat_only: false,
             rank_by: RankBy::DoubleUp,
             running: None,
             results: Vec::new(),
@@ -511,8 +513,12 @@ impl App {
             .max(1.0) as u64;
 
         let strategies = explore_strategies();
-        let combos =
-            strategies.len() as u64 * Progression::ALL.len() as u64 * EXPLORE_QUITS.len() as u64;
+        let prog_count = if self.explore_flat_only {
+            1
+        } else {
+            Progression::ALL.len() as u64
+        };
+        let combos = strategies.len() as u64 * prog_count * EXPLORE_QUITS.len() as u64;
         let progress = Arc::new(AtomicU64::new(0));
         let stop = Arc::new(AtomicBool::new(false));
         let total_work = mins.len() as u64 * combos * sessions;
@@ -525,6 +531,7 @@ impl App {
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0x9E3779B97F4A7C15);
 
+        let flat_only = self.explore_flat_only;
         std::thread::spawn(move || {
             run_explore_worker(
                 rules,
@@ -532,6 +539,7 @@ impl App {
                 budget_cents,
                 sessions,
                 horizon_rolls,
+                flat_only,
                 base_seed,
                 progress_w,
                 stop_w,
@@ -545,7 +553,11 @@ impl App {
         self.result_params = Some(ResultParams {
             budget_dollars: self.budget_dollars,
             quit_mult: None,
-            progression: "all progressions",
+            progression: if self.explore_flat_only {
+                "flat betting only"
+            } else {
+                "all progressions"
+            },
             bets: "11 betting strategies × 12 progressions × 4 quit rules".to_owned(),
             rolls_per_hour: self.rolls_per_hour,
             target_hours: self.target_hours,
@@ -593,6 +605,7 @@ fn run_explore_worker(
     budget_cents: i64,
     sessions: u64,
     horizon_rolls: u64,
+    flat_only: bool,
     base_seed: u64,
     progress: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
@@ -600,6 +613,14 @@ fn run_explore_worker(
 ) {
     let started = Instant::now();
     let strategies = explore_strategies();
+    // Flat-only mode isolates bet selection from distribution-shaping:
+    // pressing progressions dominate goal-probability objectives (bold play),
+    // so pinning them to Flat lets the bet types be compared on their own.
+    let progressions: &[Progression] = if flat_only {
+        &[Progression::Flat]
+    } else {
+        &Progression::ALL
+    };
     'mins: for (mi, &min) in mins.iter().enumerate() {
         let mut rows: Vec<ExploreRow> = Vec::new();
         // Common random numbers: the seed depends on the table minimum and
@@ -609,7 +630,7 @@ fn run_explore_worker(
         // session count.
         let seed_base = base_seed ^ ((mi as u64 + 1) << 32);
         for (sname, sel_base) in &strategies {
-            for prog in Progression::ALL {
+            for &prog in progressions {
                 let mut sel = sel_base.clone();
                 sel.progression = prog;
                 for quit in EXPLORE_QUITS {
@@ -1063,6 +1084,13 @@ impl App {
                         .range(500..=100_000),
                 );
             });
+            ui.checkbox(&mut self.explore_flat_only, "Flat betting only")
+                .on_hover_text(
+                    "Pin every combo to flat betting so bet selections are compared on \
+                     their own merits. Pressing progressions reshape the outcome \
+                     distribution (many more doubles AND many more busts), which \
+                     dominates goal-probability rankings when they are in the sweep.",
+                );
             let explore_btn = egui::Button::new(
                 egui::RichText::new("🔍 Explore Strategies")
                     .size(16.0)
@@ -1285,8 +1313,13 @@ impl App {
             ),
             None => return,
         };
+        let mode = self
+            .result_params
+            .as_ref()
+            .map(|p| p.progression)
+            .unwrap_or("all progressions");
         ui.label(format!(
-            "Best strategy / pressing / quit combos for a ${budget_dollars:.0} budget over {hours:.1} hours. \
+            "Best strategy / pressing / quit combos ({mode}) for a ${budget_dollars:.0} budget over {hours:.1} hours. \
              \"Walk-out\" money counts early quits and busts at their ending value."
         ));
         ui.small(
@@ -1474,6 +1507,69 @@ mod tests {
         sel.set_place(8, true);
         let s = bets_summary(&sel, OddsPolicy::X345);
         assert_eq!(s, "Pass, Come×2, odds (3-4-5x odds), Place 6/8");
+    }
+
+    /// Does the pressing strategy really change P(double)? Same bets, same
+    /// quit rule, same dice — only the progression differs. Run with:
+    ///   cargo test --release -- --ignored progression_effect --nocapture
+    #[test]
+    #[ignore]
+    fn progression_effect_on_doubling() {
+        use rayon::prelude::*;
+        let rules = Rules {
+            odds_policy: OddsPolicy::X345,
+            field_12_triple: false,
+            come_odds_work_on_comeout: false,
+            prop_bet_cents: 500,
+            table_max_mult: 500,
+        };
+        let budget = 100_000i64; // $1,000 at a $5 table, quit at 2x
+        let sessions = 400_000u64;
+        println!(
+            "3-pt Molly, $5 min, $1000 budget, quit 2x, 400 rolls, {}k sessions:",
+            sessions / 1000
+        );
+        for prog in [
+            Progression::Flat,
+            Progression::DAlembert,
+            Progression::ReverseDAlembert,
+            Progression::Paroli3,
+            Progression::Martingale,
+            Progression::OscarsGrind,
+        ] {
+            let mut sel = BetSelection {
+                pass_line: false,
+                ..Default::default()
+            };
+            sel.pass_line = true;
+            sel.come_max = 2;
+            sel.take_odds = true;
+            sel.progression = prog;
+            let (doubles, busts) = (0..sessions)
+                .into_par_iter()
+                .map(|i| {
+                    let o = sim::run_horizon_session(
+                        &sel,
+                        &rules,
+                        500,
+                        budget,
+                        Some(budget * 2),
+                        400,
+                        0xFEED ^ i,
+                    );
+                    ((o.final_cents >= budget * 2) as u64, o.busted as u64)
+                })
+                .reduce(|| (0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+            let p = doubles as f64 / sessions as f64;
+            let se = (p * (1.0 - p) / sessions as f64).sqrt();
+            println!(
+                "  {:22} P(double) = {:5.2}% +-{:.2}%   bust = {:5.2}%",
+                prog.label(),
+                p * 100.0,
+                se * 100.0,
+                busts as f64 / sessions as f64 * 100.0
+            );
+        }
     }
 
     /// Investigation harness: near-ground-truth explorer leaderboard for a
