@@ -1855,15 +1855,8 @@ mod tests {
             println!();
             println!("=== seed {seed}: $100 table, $1,000 budget, 3-pt Molly + 3-4-5x odds, D'Alembert, quit at $2,000 ===");
             println!(
-                "{:>4} {:>6} {:>7} {:>9} {:>9} {:>9} {:>9}  {}",
-                "roll",
-                "dice",
-                "point",
-                "placed",
-                "resolved",
-                "cash",
-                "total",
-                "next flat (pass/come)"
+                "{:>4} {:>6} {:>7} {:>9} {:>9} {:>9} {:>9}  next flat (pass/come)",
+                "roll", "dice", "point", "placed", "resolved", "cash", "total"
             );
             let mut rng = Xoshiro256pp::seed_from_u64(seed);
             let mut s = Session::new(&sel, &r, min, budget, false);
