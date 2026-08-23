@@ -1043,7 +1043,7 @@ impl<'a> Session<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RuinOutcome {
     pub rolls: u64,
     pub censored: bool,
@@ -1051,54 +1051,7 @@ pub struct RuinOutcome {
     pub hit_target: bool,
 }
 
-/// Play until the bankroll can no longer sustain the strategy, until the
-/// take-profit target (cash + face value of live bets) is reached, or until
-/// `max_rolls`.
-pub fn run_ruin_session(
-    sel: &BetSelection,
-    rules: &Rules,
-    table_min_cents: i64,
-    budget_cents: i64,
-    quit_target_cents: Option<i64>,
-    max_rolls: u64,
-    seed: u64,
-) -> RuinOutcome {
-    let mut rng = Xoshiro256pp::seed_from_u64(seed);
-    let mut s = Session::new(sel, rules, table_min_cents, budget_cents, false);
-    let cheapest = s.cheapest_selected_stake();
-    let mut rolls = 0u64;
-    loop {
-        s.place_bets();
-        if !s.has_multi_roll_bets() && !s.has_one_roll_bets() && s.cash < cheapest {
-            return RuinOutcome {
-                rolls,
-                censored: false,
-                hit_target: false,
-            };
-        }
-        let (d1, d2) = (rng.die(), rng.die());
-        rolls += 1;
-        s.resolve(d1, d2);
-        if let Some(target) = quit_target_cents {
-            if s.cash + s.on_table_face() >= target {
-                return RuinOutcome {
-                    rolls,
-                    censored: false,
-                    hit_target: true,
-                };
-            }
-        }
-        if rolls >= max_rolls {
-            return RuinOutcome {
-                rolls,
-                censored: true,
-                hit_target: false,
-            };
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HorizonOutcome {
     /// Cash plus face value of live bets when the session ends.
     pub final_cents: i64,
@@ -1108,6 +1061,135 @@ pub struct HorizonOutcome {
     pub hit_target: bool,
     /// Rolls actually played (equal to the horizon unless the session ended early).
     pub rolls: u64,
+}
+
+/// One budgeted session, reported two ways from the same dice.
+pub struct SessionOutcomes {
+    /// The full play-until-bust/quit/cap trajectory.
+    pub ruin: RuinOutcome,
+    /// The fixed-horizon snapshot: exactly what the session looked like as it
+    /// crossed `horizon_rolls` (or how it had already ended before that).
+    pub horizon: HorizonOutcome,
+}
+
+/// Play one session and report both the ruin trajectory and the fixed-horizon
+/// snapshot. The horizon result is identical to running a separate horizon
+/// session with the same seed — the horizon is a strict prefix of the ruin
+/// trajectory — so one pass answers both questions, halving simulation work.
+///
+/// * Bust and take-profit end both views at once.
+/// * Crossing `horizon_rolls` freezes the horizon view (wealth = cash plus
+///   live bets at face value); play continues for the ruin view.
+/// * Reaching `max_rolls` freezes the ruin view as censored; if the horizon
+///   lies beyond the cap, play continues (with full budget semantics) until
+///   the horizon view is decided too.
+#[allow(clippy::too_many_arguments)]
+pub fn run_session(
+    sel: &BetSelection,
+    rules: &Rules,
+    table_min_cents: i64,
+    budget_cents: i64,
+    quit_target_cents: Option<i64>,
+    max_rolls: u64,
+    horizon_rolls: u64,
+    seed: u64,
+) -> SessionOutcomes {
+    let mut rng = Xoshiro256pp::seed_from_u64(seed);
+    let mut s = Session::new(sel, rules, table_min_cents, budget_cents, false);
+    let cheapest = s.cheapest_selected_stake();
+    let mut rolls = 0u64;
+    let mut ruin: Option<RuinOutcome> = None;
+    let mut horizon: Option<HorizonOutcome> = None;
+    loop {
+        s.place_bets();
+        if !s.has_multi_roll_bets() && !s.has_one_roll_bets() && s.cash < cheapest {
+            return SessionOutcomes {
+                ruin: ruin.unwrap_or(RuinOutcome {
+                    rolls,
+                    censored: false,
+                    hit_target: false,
+                }),
+                horizon: horizon.unwrap_or(HorizonOutcome {
+                    final_cents: s.cash,
+                    busted: true,
+                    hit_target: false,
+                    rolls,
+                }),
+            };
+        }
+        let (d1, d2) = (rng.die(), rng.die());
+        rolls += 1;
+        s.resolve(d1, d2);
+        if let Some(target) = quit_target_cents {
+            let wealth = s.cash + s.on_table_face();
+            if wealth >= target {
+                return SessionOutcomes {
+                    ruin: ruin.unwrap_or(RuinOutcome {
+                        rolls,
+                        censored: false,
+                        hit_target: true,
+                    }),
+                    horizon: horizon.unwrap_or(HorizonOutcome {
+                        final_cents: wealth,
+                        busted: false,
+                        hit_target: true,
+                        rolls,
+                    }),
+                };
+            }
+        }
+        if horizon.is_none() && rolls >= horizon_rolls {
+            horizon = Some(HorizonOutcome {
+                final_cents: s.cash + s.on_table_face(),
+                busted: false,
+                hit_target: false,
+                rolls,
+            });
+        }
+        if ruin.is_none() && rolls >= max_rolls {
+            ruin = Some(RuinOutcome {
+                rolls,
+                censored: true,
+                hit_target: false,
+            });
+        }
+        if let (Some(r), Some(h)) = (ruin, horizon) {
+            return SessionOutcomes {
+                ruin: r,
+                horizon: h,
+            };
+        }
+    }
+}
+
+/// Play until the bankroll can no longer sustain the strategy, until the
+/// take-profit target (cash + face value of live bets) is reached, or until
+/// `max_rolls`.
+///
+/// The app's worker uses [`run_session`] to get this and the horizon view in
+/// one pass; this single-view form is kept as API surface and test harness.
+#[allow(dead_code)]
+pub fn run_ruin_session(
+    sel: &BetSelection,
+    rules: &Rules,
+    table_min_cents: i64,
+    budget_cents: i64,
+    quit_target_cents: Option<i64>,
+    max_rolls: u64,
+    seed: u64,
+) -> RuinOutcome {
+    // A zero-roll horizon is decided immediately, so only the ruin view runs.
+    run_session(
+        sel,
+        rules,
+        table_min_cents,
+        budget_cents,
+        quit_target_cents,
+        max_rolls,
+        0,
+        seed,
+    )
+    .ruin
 }
 
 /// Play a fixed number of rolls with the real budget (or until ruin, or until
@@ -1121,41 +1203,18 @@ pub fn run_horizon_session(
     horizon_rolls: u64,
     seed: u64,
 ) -> HorizonOutcome {
-    let mut rng = Xoshiro256pp::seed_from_u64(seed);
-    let mut s = Session::new(sel, rules, table_min_cents, budget_cents, false);
-    let cheapest = s.cheapest_selected_stake();
-    let mut rolls = 0u64;
-    while rolls < horizon_rolls {
-        s.place_bets();
-        if !s.has_multi_roll_bets() && !s.has_one_roll_bets() && s.cash < cheapest {
-            return HorizonOutcome {
-                final_cents: s.cash,
-                busted: true,
-                hit_target: false,
-                rolls,
-            };
-        }
-        let (d1, d2) = (rng.die(), rng.die());
-        rolls += 1;
-        s.resolve(d1, d2);
-        if let Some(target) = quit_target_cents {
-            let wealth = s.cash + s.on_table_face();
-            if wealth >= target {
-                return HorizonOutcome {
-                    final_cents: wealth,
-                    busted: false,
-                    hit_target: true,
-                    rolls,
-                };
-            }
-        }
-    }
-    HorizonOutcome {
-        final_cents: s.cash + s.on_table_face(),
-        busted: false,
-        hit_target: false,
-        rolls,
-    }
+    // Cap the ruin view at the horizon so both views finish together.
+    run_session(
+        sel,
+        rules,
+        table_min_cents,
+        budget_cents,
+        quit_target_cents,
+        horizon_rolls,
+        horizon_rolls,
+        seed,
+    )
+    .horizon
 }
 
 /// Play a fixed number of rolls with an unconstrained bankroll and report the
@@ -1697,6 +1756,281 @@ mod tests {
         s.place_bets();
         assert_eq!(s.pass, 1000);
         assert_eq!(s.cash, 100_000 + 1000 - s.pass);
+    }
+
+    /// Verbatim copy of the pre-merge `run_ruin_session` loop, kept as the
+    /// behavioral reference for the merged `run_session`.
+    fn reference_ruin_session(
+        sel: &BetSelection,
+        rules: &Rules,
+        table_min_cents: i64,
+        budget_cents: i64,
+        quit_target_cents: Option<i64>,
+        max_rolls: u64,
+        seed: u64,
+    ) -> RuinOutcome {
+        let mut rng = Xoshiro256pp::seed_from_u64(seed);
+        let mut s = Session::new(sel, rules, table_min_cents, budget_cents, false);
+        let cheapest = s.cheapest_selected_stake();
+        let mut rolls = 0u64;
+        loop {
+            s.place_bets();
+            if !s.has_multi_roll_bets() && !s.has_one_roll_bets() && s.cash < cheapest {
+                return RuinOutcome {
+                    rolls,
+                    censored: false,
+                    hit_target: false,
+                };
+            }
+            let (d1, d2) = (rng.die(), rng.die());
+            rolls += 1;
+            s.resolve(d1, d2);
+            if let Some(target) = quit_target_cents {
+                if s.cash + s.on_table_face() >= target {
+                    return RuinOutcome {
+                        rolls,
+                        censored: false,
+                        hit_target: true,
+                    };
+                }
+            }
+            if rolls >= max_rolls {
+                return RuinOutcome {
+                    rolls,
+                    censored: true,
+                    hit_target: false,
+                };
+            }
+        }
+    }
+
+    /// Verbatim copy of the pre-merge `run_horizon_session` loop.
+    fn reference_horizon_session(
+        sel: &BetSelection,
+        rules: &Rules,
+        table_min_cents: i64,
+        budget_cents: i64,
+        quit_target_cents: Option<i64>,
+        horizon_rolls: u64,
+        seed: u64,
+    ) -> HorizonOutcome {
+        let mut rng = Xoshiro256pp::seed_from_u64(seed);
+        let mut s = Session::new(sel, rules, table_min_cents, budget_cents, false);
+        let cheapest = s.cheapest_selected_stake();
+        let mut rolls = 0u64;
+        while rolls < horizon_rolls {
+            s.place_bets();
+            if !s.has_multi_roll_bets() && !s.has_one_roll_bets() && s.cash < cheapest {
+                return HorizonOutcome {
+                    final_cents: s.cash,
+                    busted: true,
+                    hit_target: false,
+                    rolls,
+                };
+            }
+            let (d1, d2) = (rng.die(), rng.die());
+            rolls += 1;
+            s.resolve(d1, d2);
+            if let Some(target) = quit_target_cents {
+                let wealth = s.cash + s.on_table_face();
+                if wealth >= target {
+                    return HorizonOutcome {
+                        final_cents: wealth,
+                        busted: false,
+                        hit_target: true,
+                        rolls,
+                    };
+                }
+            }
+        }
+        HorizonOutcome {
+            final_cents: s.cash + s.on_table_face(),
+            busted: false,
+            hit_target: false,
+            rolls,
+        }
+    }
+
+    /// A varied battery of player configurations for equivalence proofs:
+    /// every bet family, several progressions, quit rules on and off.
+    fn equivalence_battery() -> Vec<(BetSelection, Rules, Option<i64>)> {
+        let mut cfgs = Vec::new();
+        cfgs.push((only(|s| s.pass_line = true), rules(), None));
+        cfgs.push((
+            only(|s| {
+                s.pass_line = true;
+                s.take_odds = true;
+            }),
+            Rules {
+                odds_policy: OddsPolicy::X345,
+                ..rules()
+            },
+            None,
+        ));
+        cfgs.push((
+            only(|s| {
+                s.pass_line = true;
+                s.come_max = 2;
+                s.take_odds = true;
+            }),
+            Rules {
+                odds_policy: OddsPolicy::X2,
+                ..rules()
+            },
+            Some(20_000),
+        ));
+        cfgs.push((
+            only(|s| {
+                s.dont_pass = true;
+                s.dont_come_max = 2;
+                s.take_odds = true;
+            }),
+            Rules {
+                odds_policy: OddsPolicy::X345,
+                come_odds_work_on_comeout: true,
+                ..rules()
+            },
+            None,
+        ));
+        cfgs.push((
+            only(|s| {
+                s.set_place(6, true);
+                s.set_place(8, true);
+                s.progression = Progression::FullPress;
+            }),
+            rules(),
+            None,
+        ));
+        cfgs.push((
+            only(|s| {
+                s.field = true;
+                s.set_place(5, true);
+                s.set_place(6, true);
+                s.set_place(8, true);
+                s.progression = Progression::Martingale;
+            }),
+            Rules {
+                field_12_triple: true,
+                table_max_mult: 20,
+                ..rules()
+            },
+            Some(15_000),
+        ));
+        cfgs.push((
+            only(|s| {
+                s.hardways = [true; 4];
+                s.any_seven = true;
+                s.any_craps = true;
+                s.progression = Progression::GrandMartingale;
+            }),
+            rules(),
+            None,
+        ));
+        cfgs.push((
+            only(|s| {
+                s.pass_line = true;
+                s.dont_pass = true;
+                s.come_max = 3;
+                s.dont_come_max = 1;
+                s.take_odds = true;
+                s.field = true;
+                s.place = [true; 6];
+                s.hardways = [true; 4];
+                s.any_seven = true;
+                s.any_craps = true;
+                s.progression = Progression::Fibonacci;
+            }),
+            Rules {
+                odds_policy: OddsPolicy::X10,
+                ..rules()
+            },
+            Some(30_000),
+        ));
+        cfgs
+    }
+
+    #[test]
+    fn merged_session_matches_split_references() {
+        // The merged run_session must reproduce the pre-merge ruin and
+        // horizon loops exactly, seed for seed, field for field — including
+        // when the ruin cap falls before the horizon.
+        let min = 1000;
+        let horizon = 400;
+        for (ci, (sel, r, quit)) in equivalence_battery().iter().enumerate() {
+            for &budget in &[5_000i64, 30_000] {
+                for seed in 0..300u64 {
+                    let ctx = format!("config {ci} budget {budget} seed {seed}");
+
+                    // Standard shape: cap well beyond the horizon.
+                    let m = run_session(sel, r, min, budget, *quit, 2_000, horizon, seed);
+                    let rr = reference_ruin_session(sel, r, min, budget, *quit, 2_000, seed);
+                    let rh = reference_horizon_session(sel, r, min, budget, *quit, horizon, seed);
+                    assert_eq!(m.ruin, rr, "ruin mismatch: {ctx}");
+                    assert_eq!(m.horizon, rh, "horizon mismatch: {ctx}");
+
+                    // Cap before the horizon: ruin censors early, horizon
+                    // plays on.
+                    let m = run_session(sel, r, min, budget, *quit, 300, horizon, seed);
+                    let rr = reference_ruin_session(sel, r, min, budget, *quit, 300, seed);
+                    assert_eq!(m.ruin, rr, "capped ruin mismatch: {ctx}");
+                    assert_eq!(m.horizon, rh, "capped horizon mismatch: {ctx}");
+
+                    // Public wrappers.
+                    let w = run_ruin_session(sel, r, min, budget, *quit, 2_000, seed);
+                    assert_eq!(
+                        w,
+                        rr_standard(sel, r, min, budget, *quit, seed),
+                        "wrapper ruin: {ctx}"
+                    );
+                    let w = run_horizon_session(sel, r, min, budget, *quit, horizon, seed);
+                    assert_eq!(w, rh, "wrapper horizon: {ctx}");
+                }
+            }
+        }
+
+        fn rr_standard(
+            sel: &BetSelection,
+            r: &Rules,
+            min: i64,
+            budget: i64,
+            quit: Option<i64>,
+            seed: u64,
+        ) -> RuinOutcome {
+            reference_ruin_session(sel, r, min, budget, quit, 2_000, seed)
+        }
+    }
+
+    #[test]
+    fn sessions_share_dice_across_rule_variants() {
+        // Common-random-numbers invariant: sessions with the same seed play
+        // the same dice, so a session that never triggers its quit rule must
+        // end exactly like the same session with no quit rule at all. This
+        // is what makes explorer comparisons luck-free.
+        let sel = only(|s| {
+            s.pass_line = true;
+            s.take_odds = true;
+        });
+        let r = Rules {
+            odds_policy: OddsPolicy::X345,
+            ..rules()
+        };
+        let mut hits = 0;
+        for seed in 0..500u64 {
+            let with_quit = run_horizon_session(&sel, &r, 1000, 30_000, Some(60_000), 400, seed);
+            let without = run_horizon_session(&sel, &r, 1000, 30_000, None, 400, seed);
+            if with_quit.hit_target {
+                hits += 1;
+                assert!(with_quit.final_cents >= 60_000, "seed {seed}");
+                assert!(with_quit.rolls <= without.rolls, "seed {seed}");
+            } else {
+                assert_eq!(with_quit, without, "seed {seed}");
+            }
+        }
+        // The invariant must have been exercised from both sides.
+        assert!(
+            hits > 0 && hits < 500,
+            "degenerate battery: {hits}/500 hits"
+        );
     }
 
     #[test]

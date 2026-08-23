@@ -428,7 +428,7 @@ impl App {
 
         let progress = Arc::new(AtomicU64::new(0));
         let stop = Arc::new(AtomicBool::new(false));
-        let total_work = mins.len() as u64 * sessions * 3;
+        let total_work = mins.len() as u64 * sessions * 2;
         let (tx, rx) = std::sync::mpsc::channel::<Msg>();
 
         let progress_w = progress.clone();
@@ -596,7 +596,12 @@ fn run_explore_worker(
     let strategies = explore_strategies();
     'mins: for (mi, &min) in mins.iter().enumerate() {
         let mut rows: Vec<ExploreRow> = Vec::new();
-        let mut combo_idx = 0u64;
+        // Common random numbers: the seed depends on the table minimum and
+        // the session index but NOT the combo, so every strategy/progression/
+        // quit combo plays the exact same dice sequences. Luck cancels out of
+        // head-to-head comparisons, making rankings far tighter at the same
+        // session count.
+        let seed_base = base_seed ^ ((mi as u64 + 1) << 32);
         for (sname, sel_base) in &strategies {
             for prog in Progression::ALL {
                 let mut sel = sel_base.clone();
@@ -608,7 +613,6 @@ fn run_explore_worker(
                     let quit_cents = quit.map(|m| {
                         ((budget_cents as f64 * m).round() as i64).max(budget_cents + 100)
                     });
-                    let seed_base = base_seed ^ ((mi as u64 + 1) << 52) ^ ((combo_idx + 1) << 32);
                     let outs: Vec<(i64, bool, u64)> = (0..sessions)
                         .into_par_iter()
                         .map(|i| {
@@ -655,7 +659,6 @@ fn run_explore_worker(
                         mean_final: finals.iter().map(|&v| v as f64).sum::<f64>() / n,
                         median_rolls: rolls[rolls.len() / 2],
                     });
-                    combo_idx += 1;
                 }
             }
         }
@@ -690,64 +693,54 @@ fn run_worker(
         }
         let mode_seed = |mode: u64, i: u64| base_seed ^ ((mi as u64 + 1) << 48) ^ (mode << 40) ^ i;
 
-        // Phase 1: plays until bust / take-profit quit at the configured budget.
-        let outcomes: Vec<(u64, bool, bool)> = (0..sessions)
+        // Phase 1: one pass per session answers both the "plays until bust or
+        // quit" question and the "bankroll after the horizon" question — the
+        // horizon view is a snapshot of the same trajectory as it crosses the
+        // horizon roll count, so simulating it separately would be pure waste.
+        let outcomes: Vec<(sim::RuinOutcome, sim::HorizonOutcome)> = (0..sessions)
             .into_par_iter()
             .map(|i| {
                 if stop.load(Ordering::Relaxed) {
-                    return (0, false, false);
+                    let zero_r = sim::RuinOutcome {
+                        rolls: 0,
+                        censored: false,
+                        hit_target: false,
+                    };
+                    let zero_h = sim::HorizonOutcome {
+                        final_cents: 0,
+                        busted: false,
+                        hit_target: false,
+                        rolls: 0,
+                    };
+                    return (zero_r, zero_h);
                 }
-                let o = sim::run_ruin_session(
+                let o = sim::run_session(
                     &sel,
                     &rules,
                     min,
                     budget_cents,
                     quit_target,
                     max_rolls,
+                    horizon_rolls,
                     mode_seed(1, i),
                 );
                 progress.fetch_add(1, Ordering::Relaxed);
-                (o.rolls, o.censored, o.hit_target)
+                (o.ruin, o.horizon)
             })
             .collect();
         if stop.load(Ordering::Relaxed) {
             break;
         }
-        let censored = outcomes.iter().filter(|&&(_, c, _)| c).count() as u64;
-        let hit_target = outcomes.iter().filter(|&&(_, _, h)| h).count() as u64;
-        let mut rolls: Vec<u64> = outcomes.into_iter().map(|(r, _, _)| r).collect();
+        let censored = outcomes.iter().filter(|(r, _)| r.censored).count() as u64;
+        let hit_target = outcomes.iter().filter(|(r, _)| r.hit_target).count() as u64;
+        let busted = outcomes.iter().filter(|(_, h)| h.busted).count() as u64;
+        let quit_hits = outcomes.iter().filter(|(_, h)| h.hit_target).count() as u64;
+        let mut rolls: Vec<u64> = outcomes.iter().map(|(r, _)| r.rolls).collect();
+        let mut finals: Vec<i64> = outcomes.iter().map(|(_, h)| h.final_cents).collect();
         let ruin = sim::summarize_ruin(&mut rolls, censored, hit_target);
-
-        // Phase 2: ending bankroll after the target horizon at the real budget
-        // (sessions that bust or quit early keep their ending value).
-        let horizon_outcomes: Vec<(i64, bool, bool)> = (0..sessions)
-            .into_par_iter()
-            .map(|i| {
-                if stop.load(Ordering::Relaxed) {
-                    return (0, false, false);
-                }
-                let o = sim::run_horizon_session(
-                    &sel,
-                    &rules,
-                    min,
-                    budget_cents,
-                    quit_target,
-                    horizon_rolls,
-                    mode_seed(3, i),
-                );
-                progress.fetch_add(1, Ordering::Relaxed);
-                (o.final_cents, o.busted, o.hit_target)
-            })
-            .collect();
-        if stop.load(Ordering::Relaxed) {
-            break;
-        }
-        let busted = horizon_outcomes.iter().filter(|&&(_, b, _)| b).count() as u64;
-        let quit_hits = horizon_outcomes.iter().filter(|&&(_, _, h)| h).count() as u64;
-        let mut finals: Vec<i64> = horizon_outcomes.into_iter().map(|(v, _, _)| v).collect();
         let horizon = sim::summarize_horizon(&mut finals, busted, quit_hits);
 
-        // Phase 3: bankroll needed to survive the target horizon.
+        // Phase 2: bankroll needed to survive the target horizon.
         let mut outlays: Vec<i64> = (0..sessions)
             .into_par_iter()
             .map(|i| {
@@ -1051,6 +1044,10 @@ impl App {
                 "Strategies that take odds will use: {}",
                 self.odds_policy.label()
             ));
+            ui.small(
+                "Every combo plays the same dice (common random numbers), so \
+                 head-to-head rankings aren't distorted by luck.",
+            );
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.label("Sessions per combo");

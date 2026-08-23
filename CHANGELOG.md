@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The session-length and ending-bankroll phases now share one simulation
+  pass per session (the horizon view is a snapshot of the ruin trajectory),
+  cutting standard-run work by a third. Proven equivalent to the previous
+  split phases seed-by-seed against reference implementations.
+- The strategy explorer uses common random numbers: every combo plays the
+  same dice sequences per table minimum, so head-to-head rankings are much
+  tighter at the same session count.
+
 ## [0.1.0] - 2026-08-21
 
 Initial release.

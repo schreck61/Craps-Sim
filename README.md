@@ -35,8 +35,9 @@ draws a fresh seed, so repeated runs give independent samples.
    strategies × 12 progressions × 4 quit rules per table minimum and ranks
    the combinations under a selectable objective: chance to walk out with ≥2×
    budget, chance to walk out ahead, chance to not bust, median walk-out, or
-   mean walk-out. Re-ranking is instant — all five metrics are kept for every
-   combination.
+   mean walk-out. Every combination plays the same dice sequences (common
+   random numbers), so head-to-head rankings are not distorted by luck, and
+   re-ranking is instant — all five metrics are kept for every combination.
 
 ## Features
 
@@ -54,8 +55,9 @@ draws a fresh seed, so repeated runs give independent samples.
 - **Quit while ahead**: optional take-profit rule at a multiple of the
   starting budget.
 - **Performance**: hundreds of millions of dice rolls per second on a modern
-  multi-core machine; the default 1.8M-session run finishes in seconds, with
-  live progress and cancellation.
+  multi-core machine; each simulated session answers both the session-length
+  and ending-bankroll questions in a single pass, and the default 1.2M-session
+  run finishes in seconds with live progress and cancellation.
 
 ## Installing
 
