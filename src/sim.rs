@@ -1848,12 +1848,19 @@ mod tests {
             prop_bet_cents: 500,
             table_max_mult: 500,
         };
-        let min = 10_000i64; // $100 table
+        let min: i64 = std::env::var("TRACE_MIN")
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok())
+            .map(|d| d * 100)
+            .unwrap_or(10_000); // dollars; default $100 table
         let budget = 100_000i64; // $1,000
         let target = budget * 2;
         for seed in seeds {
             println!();
-            println!("=== seed {seed}: $100 table, $1,000 budget, 3-pt Molly + 3-4-5x odds, D'Alembert, quit at $2,000 ===");
+            println!(
+                "=== seed {seed}: ${} table, $1,000 budget, 3-pt Molly + 3-4-5x odds, D'Alembert, quit at $2,000 ===",
+                min / 100
+            );
             println!(
                 "{:>4} {:>6} {:>7} {:>9} {:>9} {:>9} {:>9}  next flat (pass/come)",
                 "roll", "dice", "point", "placed", "resolved", "cash", "total"
