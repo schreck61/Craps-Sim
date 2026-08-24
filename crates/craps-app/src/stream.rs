@@ -570,9 +570,25 @@ mod tests {
             ..Default::default()
         };
         let run = start_main_run(&cfg, 7);
-        thread::sleep(std::time::Duration::from_millis(120));
-        run.cancel();
+        // Cancel only after batches have demonstrably landed: a fixed sleep
+        // raced cold CI runners to an honest-but-untestable n == 0.
         let deadline = Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            {
+                let st = run.store.lock().unwrap();
+                if let RunStatus::Streaming { n } = st.status {
+                    if n > 0 {
+                        break;
+                    }
+                }
+                if st.status == RunStatus::Complete {
+                    panic!("run completed before any streaming snapshot");
+                }
+            }
+            assert!(Instant::now() < deadline, "no sessions ever arrived");
+            thread::sleep(std::time::Duration::from_millis(5));
+        }
+        run.cancel();
         loop {
             {
                 let st = run.store.lock().unwrap();
