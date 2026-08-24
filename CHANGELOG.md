@@ -5,6 +5,25 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3] - 2026-08-24
+
+### Fixed
+
+- Dim widget text on systems whose OS runs in light mode. egui keeps
+  separate dark/light style slots and resolves the active one from the OS
+  theme, which arrives one frame after startup — the app's colors landed
+  in the slot that was about to go inactive, leaving egui's factory
+  defaults on screen until the user toggled themes by hand. The theme now
+  writes both slots, and a first-frame re-sync means a first launch with
+  no saved preference follows the real OS theme.
+
+### Added
+
+- An application icon — the "Seven-Out Curve": the ending-bankroll
+  histogram with its ruin-red bust bar and a thrown 4-and-3 landing at
+  its foot. Shipped in the macOS bundle, embedded in the Windows
+  executable, and set as the runtime window icon everywhere.
+
 ## [0.4.2] - 2026-08-24
 
 ### Fixed
