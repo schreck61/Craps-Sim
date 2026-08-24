@@ -5,6 +5,37 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-08-24
+
+### Fixed
+
+- Replay's play button plays. The theater still opens with the full night
+  revealed; play now rewinds to the top when pressed at the end, resumes
+  in place mid-night, drives its own frames (the playhead previously
+  advanced only while the mouse moved), and defaults to 60× — 1× is
+  literal casino time (one roll every ~36 s) and remains one keypress
+  away.
+- The Duel re-simulates explorer combos under the explorer's rules, where
+  the odds policy is always available to strategies that take odds.
+  Previously the main Design's "take odds" toggle could silently strip
+  odds from a duel of odds-taking strategies.
+- The Duel screen scrolls: the A-vs-B scatter, paired-difference
+  histogram, and decile ladder were unreachable below the fold.
+
+### Changed
+
+- Custom table minimums join the Design chip row as real chips in their
+  reserve color — a $250 clicks off like any canonical chip; the text
+  field remains the way to add one.
+- The Explorer gains an always-visible Duel bar: it explains
+  click/shift-click selection, names both armed sides in their colors,
+  and offers an "Open the Duel ▶" button (D still works). Mismatched
+  table minimums are called out instead of silently doing nothing.
+- The Duel's session picks highlight the active choice beside a
+  "showing night #N" readout.
+- In Explorer mode the left rail reports the sweep (progress, session
+  count, finish time) instead of the Findings run's per-minimum lanes.
+
 ## [0.4.0] - 2026-08-24
 
 ### Changed
