@@ -137,3 +137,8 @@ jobs:
       - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # Mirrors deny.toml: ttf-parser is unmaintained but reaches us
+          # only through winit's Wayland titlebar path; no fix exists yet.
+          # (Un-ignored warnings also make the action file issues, which
+          # this job has no permission to do.)
+          ignore: RUSTSEC-2026-0192
