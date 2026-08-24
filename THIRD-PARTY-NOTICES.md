@@ -4,16 +4,29 @@ Craps-Sim is licensed under the MIT License (see `LICENSE`).
 
 ## Algorithms
 
-The simulation's random number generator (`src/rng.rs`) is a Rust
-translation of the **xoshiro256++** generator and the **SplitMix64** seed
-expander by David Blackman and Sebastiano Vigna. The authors' reference C
-implementations are dedicated to the public domain under CC0 1.0; see
-<https://prng.di.unimi.it/> and Blackman & Vigna, "Scrambled Linear
-Pseudorandom Number Generators", ACM TOMS 2021.
+The simulation's random number generator (`crates/craps-engine/src/rng.rs`)
+is a Rust translation of the **xoshiro256++** generator and the
+**SplitMix64** seed expander by David Blackman and Sebastiano Vigna. The
+authors' reference C implementations are dedicated to the public domain
+under CC0 1.0; see <https://prng.di.unimi.it/> and Blackman & Vigna,
+"Scrambled Linear Pseudorandom Number Generators", ACM TOMS 2021.
+
+## Fonts
+
+The application's interface fonts are Modified Versions, under the SIL Open
+Font License 1.1, of three third-party families: renamed subsets of
+**Fraunces** (Copyright 2020 The Fraunces Project Authors), **Inter**
+(Copyright 2016 The Inter Project Authors), and **IBM Plex Mono**
+(Copyright 2017 IBM Corp., with Reserved Font Name "Plex"), embedded as the
+Longrun Display, Longrun Sans, and Longrun Mono families. Each family's
+complete OFL 1.1 license text ships beside the fonts, and
+`crates/craps-app/assets/fonts/FONTS-NOTICE.md` records the exact source
+versions, copyright lines, and modifications.
+
 Distributed binaries additionally embed the following third-party fonts via
 the [egui](https://github.com/emilk/egui) GUI library's default font set
-(`epaint_default_fonts`). Their license texts are included in the
-`licenses/` directory and accompany every release archive.
+(`epaint_default_fonts`), used as fallbacks. Their license texts are
+included in the `licenses/` directory and accompany every release archive.
 
 | Font | License | Text |
 | --- | --- | --- |

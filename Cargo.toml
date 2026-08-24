@@ -1,20 +1,13 @@
-[package]
-name = "craps-sim"
-version = "0.3.0"
+[workspace]
+members = ["crates/craps-engine", "crates/craps-app"]
+resolver = "2"
+
+[workspace.package]
 edition = "2021"
 rust-version = "1.95"
 authors = ["Jim Schreckengast <schreck@gmail.com>"]
-description = "Massively parallel Monte Carlo craps simulator with a GUI: bankroll survival, session distributions, and a strategy explorer"
 license = "MIT"
 repository = "https://github.com/schreck61/Craps-Sim"
-readme = "README.md"
-keywords = ["craps", "monte-carlo", "simulation", "gambling", "egui"]
-categories = ["simulation", "games", "mathematics"]
-
-[dependencies]
-eframe = "0.36"
-egui = "0.36"
-rayon = "1.10"
 
 [profile.release]
 opt-level = 3

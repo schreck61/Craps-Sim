@@ -17,6 +17,9 @@ cargo run --release
 On Linux you will need the usual GUI development packages; see the README's
 Building section.
 
+The repository is a two-crate workspace: `crates/craps-engine` is the
+simulation library, and `crates/craps-app` is the GUI binary (`craps-sim`).
+
 ## Before you open a pull request
 
 1. **Format**: `cargo fmt`
@@ -28,7 +31,9 @@ Building section.
 
 ## What makes a good engine change
 
-The simulation engine (`src/sim.rs`) aims for *casino-accurate* behavior:
+The simulation engine (`crates/craps-engine`, split across `bets.rs`,
+`game.rs`, `session.rs`, `sweep.rs`, `trace.rs`, `edge.rs`, `stats.rs`, and
+`summary.rs`) aims for *casino-accurate* behavior:
 
 - All money is integer cents; payouts must be exact, never floating point.
 - New bets or rules need a source (a standard rules reference or a named
@@ -49,14 +54,15 @@ Please include:
 - What you expected vs. what you observed; screenshots help for UI issues.
 
 For suspected *math* bugs, a minimal dice sequence demonstrating the wrong
-payout is gold — see the deterministic tests in `src/sim.rs` for the format.
+payout is gold — see the deterministic tests in
+`crates/craps-engine/src/game.rs` for the format.
 
 ## Code style
 
 - `rustfmt` defaults; no custom style.
 - Prefer plain, well-named code over cleverness. Comments explain *why* or
   cite a craps rule, not what the next line does.
-- Public items in `sim.rs` carry doc comments.
+- Public items in `craps-engine` carry doc comments.
 
 ## License
 

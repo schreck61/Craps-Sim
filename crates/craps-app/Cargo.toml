@@ -1,0 +1,28 @@
+[package]
+name = "craps-app"
+version = "0.4.0"
+description = "Massively parallel Monte Carlo craps simulator with a GUI: bankroll survival, session distributions, and a strategy explorer"
+readme = "../../README.md"
+keywords = ["craps", "monte-carlo", "simulation", "gambling", "egui"]
+categories = ["simulation", "games", "mathematics"]
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "craps-sim"
+path = "src/main.rs"
+
+[dependencies]
+arboard = "3"
+craps-engine = { path = "../craps-engine" }
+eframe = "0.36"
+egui = "0.36"
+png = "0.18"
+rayon = "1.10"
+rfd = "0.15"
+
+[dev-dependencies]
+egui_kittest = { version = "0.36", features = ["eframe", "snapshot", "wgpu"] }

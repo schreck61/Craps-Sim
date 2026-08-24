@@ -39,6 +39,20 @@ draws a fresh seed, so repeated runs give independent samples.
    random numbers), so head-to-head rankings are not distorted by luck, and
    re-ranking is instant — all five metrics are kept for every combination.
 
+## The instrument
+
+One window, four modes: **Design** builds the player; **Findings** answers
+questions 1–3 on its Endurance, Horizon, and Stake tabs; **Explorer**
+answers question 4; **Replay** plays back any single session. The answers
+are distributions you can touch: survival curves, the ending-bankroll
+histogram with its bust bar set apart, the peak-outlay curve with a
+draggable budget line, the strategy strip and leaderboard with
+confidence-interval tie brackets, the Duel — two strategies replayed on
+identical dice — and roll-by-roll session replay over the full dice strip.
+Space runs the simulation; `?` shows the complete keyboard map. Dark and
+light themes; any chart copies or saves as a PNG (⌘⇧C / ⌘⇧S) with its
+provenance — scenario, seed, session count — baked into the pixels.
+
 ## Features
 
 - **Bets**: pass line, don't pass, come and don't come (with a cap on
@@ -142,10 +156,14 @@ neither encourages gambling nor provides betting advice.
 
 ## Acknowledgments
 
-The GUI embeds egui's default fonts, which include fonts licensed under the
-SIL Open Font License 1.1 and the Ubuntu Font Licence 1.0; distributed
-binaries include those fonts. All Rust dependencies are used under permissive
-licenses (MIT/Apache-2.0 and similar).
+The interface fonts are renamed subsets of Fraunces, Inter, and IBM Plex
+Mono, embedded under the SIL Open Font License 1.1; each family's license
+text ships beside the fonts — see
+[FONTS-NOTICE.md](crates/craps-app/assets/fonts/FONTS-NOTICE.md). The GUI
+also embeds egui's default fonts as fallbacks, which include fonts licensed
+under the SIL Open Font License 1.1 and the Ubuntu Font Licence 1.0;
+distributed binaries include those fonts. All Rust dependencies are used
+under permissive licenses (MIT/Apache-2.0 and similar).
 
 ## License
 

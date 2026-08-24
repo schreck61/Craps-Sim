@@ -5,7 +5,61 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-08-24
+
+### Changed
+
+- The interface is rebuilt (the "Long Run" redesign — the app itself is
+  still Craps Sim): one window, four modes —
+  Design, Findings, Explorer, and Replay — with each of the four core
+  questions on its own screen: Endurance (how long the money lasts),
+  Horizon (where the bankroll ends up), and Stake (how big a bankroll you
+  need) as Findings tabs, and the Explorer (what to play) as its own mode.
+- Runs stream: sessions arrive in batches while the simulation is still
+  going, so charts assemble live — bars grow, curves unfurl, confidence
+  ribbons visibly narrow — with instant cancellation and partial results
+  that stay fully interactive.
+- The seed is explicit and user-visible (shown in the rail, click to copy,
+  one click to reroll), replacing wall-clock entropy; every chart corner
+  carries its provenance (seed, session count, scenario).
+
+### Added
+
+- Closed-form house edge as permanent furniture: per-bet edge ticks and a
+  live blended edge strip in Design, a fixed per-resolved-dollar EDGE
+  column in the Explorer, and the edge in the status baseline on every
+  screen.
+- The Anchor: swap any of the twelve progressions on the Horizon histogram
+  and watch the distribution morph, re-simulated on identical dice — the
+  per-dollar edge marker stays pinned while the expected-loss pin drifts
+  with the handle.
+- The Duel: paired comparison of two strategies under common random
+  numbers — identical dice for both, with a same-dice replayed session, a
+  y = x scatter, a paired-difference histogram (tie band when the CI on
+  the median difference includes zero), and a paired decile ladder.
+- Session Replay theater: any percentile, bar, or dot opens the exact
+  re-simulated session — the bankroll trajectory drawn inside the
+  population's percentile envelope, above a roll-by-roll dice strip with
+  bet resolutions to the cent and full playback transport.
+- The Scenario Sentence: the entire configuration rendered as one line of
+  prose atop every mode. Copying the sentence is the save format; pasting
+  one into Design reconstructs the configuration.
+- Chart export: copy (⌘⇧C) or save (⌘⇧S) any chart as a 2× PNG with
+  title, Scenario Sentence, seed, and session count baked into the pixels.
+- Chart interaction: drag brushes a range and zooms to it, ⌘-scroll zooms
+  at the cursor, ⇧-scroll pans (clamped to the data; double-click resets,
+  with an on-chart hint while zoomed), and clicking pins up to three
+  reference lines that print their axis values, show the Δ between the
+  last two, and survive into exports. A new run resets each chart's zoom
+  and pins so the view recenters on the fresh distribution.
+- Dark and light themes (⌘L), following the OS on first launch, with six
+  embedded fonts — renamed OFL 1.1 subsets of Fraunces, Inter, and IBM
+  Plex Mono (see `crates/craps-app/assets/fonts/FONTS-NOTICE.md`).
+- Engine surface: a public `session_seed` determinism contract routed
+  through every consumer, a roll-by-roll session trace API, a
+  resolved-handle accumulator (mean loss ≈ edge × handle, verified across
+  all twelve progressions), 95% confidence intervals for all five explorer
+  objectives, and a batched streaming sweep API with cancellation.
 
 ## [0.3.0] - 2026-08-23
 

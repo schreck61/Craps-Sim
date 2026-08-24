@@ -9,3 +9,7 @@ Thumbs.db
 .idea/
 .vscode/
 THIRD-PARTY-LICENSES.md
+
+# kittest snapshot-update leftovers (the .png goldens themselves are tracked)
+**/tests/snapshots/*.old.png
+**/tests/snapshots/*.diff.png
