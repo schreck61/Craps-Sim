@@ -56,6 +56,9 @@ pub struct App {
     pub error: Option<String>,
     pub last_elapsed: Option<f64>,
     was_running: bool,
+    /// First-frame theme sync done. `App::new` runs before the first raw
+    /// input, so the OS theme it reads is egui's default, not the real one.
+    theme_synced: bool,
     /// A sentence fragment was clicked: Design focuses that control.
     pub focus_request: Option<FragmentId>,
     pub show_shortcuts: bool,
@@ -129,6 +132,7 @@ impl App {
             error: None,
             last_elapsed: None,
             was_running: false,
+            theme_synced: false,
             focus_request: None,
             show_shortcuts: false,
             ledger_drawer: false,
@@ -981,6 +985,22 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // First frame: the real OS theme has now arrived (it had not when
+        // App::new guessed). With no explicit preference saved, follow it.
+        if !self.theme_synced {
+            self.theme_synced = true;
+            if self.prefs.dark.is_none() {
+                let os_dark = ctx.theme() == egui::Theme::Dark;
+                if os_dark != self.theme.dark() {
+                    self.theme = if os_dark {
+                        Theme::lamplight()
+                    } else {
+                        Theme::reading_room()
+                    };
+                    theme::apply(&ctx, &self.theme);
+                }
+            }
+        }
         crate::tour::drive(self, &ctx);
         self.highlights.begin_frame();
         let mounted_last_frame: Vec<egui::Id> = ctx.data_mut(|d| {

@@ -317,7 +317,13 @@ pub fn apply(ctx: &egui::Context, t: &Theme) {
     w.open.bg_stroke = Stroke::new(1.0, t.hairline_strong);
     visuals.widgets = w;
 
-    ctx.set_visuals(visuals);
+    // BOTH egui theme slots get the app's visuals. egui resolves its
+    // active slot from the OS theme, and the first frame's raw input can
+    // flip that slot AFTER startup applied ours — leaving the app's colors
+    // in the inactive slot and egui's dull defaults on screen (the
+    // "dim text until you toggle themes" bug on light-mode systems).
+    ctx.set_visuals_of(egui::Theme::Dark, visuals.clone());
+    ctx.set_visuals_of(egui::Theme::Light, visuals);
     ctx.all_styles_mut(|s| {
         s.text_styles = [
             (

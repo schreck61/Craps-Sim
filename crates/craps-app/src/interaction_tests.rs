@@ -599,3 +599,45 @@ fn run_the_example_first_run() {
     h.state_mut().cancel_all();
     wait_terminal(&mut h, "the example run to wind down");
 }
+
+/// The OS theme arrives AFTER `App::new` and can flip egui's active style
+/// slot. Both slots must hold the app's visuals, or light-mode systems get
+/// egui's dull defaults until the user toggles themes by hand.
+#[test]
+fn theme_survives_an_os_slot_flip() {
+    let mut harness = build_app(|_| {});
+    harness.step();
+    let ink = harness.state().theme.ink;
+    assert_eq!(
+        harness
+            .ctx
+            .style_of(harness.ctx.theme())
+            .visuals
+            .override_text_color,
+        Some(ink),
+        "startup slot carries the app ink"
+    );
+    // Simulate the OS delivering the other theme after startup.
+    harness.ctx.set_theme(egui::Theme::Light);
+    harness.step();
+    assert_eq!(
+        harness
+            .ctx
+            .style_of(harness.ctx.theme())
+            .visuals
+            .override_text_color,
+        Some(harness.state().theme.ink),
+        "the flipped slot must carry the app ink too, not egui defaults"
+    );
+    harness.ctx.set_theme(egui::Theme::Dark);
+    harness.step();
+    assert_eq!(
+        harness
+            .ctx
+            .style_of(harness.ctx.theme())
+            .visuals
+            .override_text_color,
+        Some(harness.state().theme.ink),
+        "and flipping back stays themed"
+    );
+}
