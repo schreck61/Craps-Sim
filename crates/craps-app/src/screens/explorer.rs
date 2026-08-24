@@ -398,9 +398,11 @@ fn strip_of_combos(
 
             if let Some((_, k)) = best_hover {
                 let r = &rows[k];
-                cx.text(
+                // On a pill: the readout sits over the densest dot lanes
+                // and is unreadable bare.
+                cx.text_pilled(
                     Layer::Overlay,
-                    Pos2::new(cx.rect.left() + 8.0, cx.rect.bottom() - 14.0),
+                    Pos2::new(cx.rect.left() + 8.0, cx.rect.bottom() - 6.0),
                     Align2::LEFT_BOTTOM,
                     format!(
                         "{} · {} · {} — {}",
@@ -411,6 +413,7 @@ fn strip_of_combos(
                     ),
                     FontId::new(type_scale::CAPTION, theme::mono()),
                     t.ink,
+                    t.pill(),
                 );
                 if cx.response.clicked() {
                     let shift = cx.response.ctx.input(|i| i.modifiers.shift);
