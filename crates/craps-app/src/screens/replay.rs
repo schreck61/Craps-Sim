@@ -20,7 +20,6 @@ use crate::ui::theme::{self, type_scale};
 
 const SPEEDS: [f64; 4] = [1.0, 10.0, 60.0, 512.0];
 
-#[derive(Default)]
 pub struct ReplayState {
     pub trace: Option<SessionTrace>,
     pub ghost_trace: Option<SessionTrace>,
@@ -44,11 +43,45 @@ pub struct ReplayState {
     pub hovered_roll: Option<usize>,
 }
 
+impl Default for ReplayState {
+    fn default() -> Self {
+        Self {
+            trace: None,
+            ghost_trace: None,
+            session: 0,
+            min_index: 0,
+            min_cents: 0,
+            config: None,
+            seed: 0,
+            envelope: None,
+            playing: false,
+            position: 0.0,
+            // 60× out of the box: 1× is literal casino time (a roll every
+            // ~36 s at 100 rolls/h), which reads as a broken play button.
+            speed_ix: 2,
+            ghost: false,
+            header_note: String::new(),
+            entry: String::new(),
+            hovered_roll: None,
+        }
+    }
+}
+
 impl ReplayState {
     pub fn toggle_play(&mut self) {
-        if self.trace.is_some() {
-            self.playing = !self.playing;
+        let Some(trace) = self.trace.as_ref() else {
+            return;
+        };
+        if self.playing {
+            self.playing = false;
+            return;
         }
+        // The theater opens fully revealed; play from the top when the
+        // night is already complete.
+        if self.position >= trace.events.len() as f64 {
+            self.position = 0.0;
+        }
+        self.playing = true;
     }
 
     pub fn speed_up(&mut self) {
@@ -152,12 +185,16 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(6.0);
 
     // Advance the playhead in real computed rolls (never synthesized).
+    // Playback must drive its own frames: egui only repaints on input, so
+    // without this the playhead moves only while the mouse does.
     if app.replay.playing {
         let dt = ui.input(|i| i.stable_dt.min(0.1)) as f64;
         let rolls_per_sec = cfg.rolls_per_hour as f64 / 3600.0 * SPEEDS[app.replay.speed_ix];
         app.replay.position = (app.replay.position + dt * rolls_per_sec).min(events_len as f64);
         if app.replay.position >= events_len as f64 {
             app.replay.playing = false;
+        } else {
+            ui.ctx().request_repaint();
         }
     }
     let revealed = app.replay.position.floor() as usize;
@@ -406,4 +443,48 @@ fn quick_picks(app: &mut App, ui: &mut egui::Ui) {
         }
     });
     ui.add_space(4.0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn loaded_state() -> ReplayState {
+        let mut st = ReplayState::default();
+        st.load(&SimConfig::default(), None, 0, 3);
+        assert!(st.trace.is_some(), "trace loads without a run");
+        st
+    }
+
+    /// The theater opens fully revealed and paused; play from the end
+    /// rewinds to the top, play mid-night resumes in place, and a second
+    /// press pauses.
+    #[test]
+    fn play_rewinds_from_the_end_and_resumes_mid_night() {
+        let mut st = loaded_state();
+        let len = st.trace.as_ref().unwrap().events.len() as f64;
+        assert!(len > 0.0);
+        assert_eq!(st.position, len, "opens fully revealed");
+        assert!(!st.playing, "opens paused");
+
+        st.toggle_play();
+        assert!(st.playing);
+        assert_eq!(st.position, 0.0, "play from the end starts over");
+
+        st.position = len / 2.0;
+        st.toggle_play();
+        assert!(!st.playing, "second press pauses");
+        assert_eq!(st.position, len / 2.0);
+
+        st.toggle_play();
+        assert!(st.playing, "mid-night play resumes in place");
+        assert_eq!(st.position, len / 2.0);
+    }
+
+    /// 1× is literal casino time; the theater defaults to a speed a human
+    /// can see moving.
+    #[test]
+    fn default_speed_is_visible() {
+        assert!(SPEEDS[ReplayState::default().speed_ix] >= 10.0);
+    }
 }
