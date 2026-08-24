@@ -100,7 +100,7 @@ fn side_of(key: &ComboKey) -> PairSide {
     }
 }
 
-fn combo_name(key: &ComboKey) -> String {
+pub(crate) fn combo_name(key: &ComboKey) -> String {
     let strategies = explore_strategies();
     format!(
         "{} · {} · {}",
@@ -247,18 +247,28 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     );
     ui.add_space(8.0);
 
-    // Panel 1: same dice, two lives.
+    // Panel 1: same dice, two lives. The active pick is highlighted and
+    // the shown night is named, so there is never doubt about what the
+    // trajectories below are.
     ui.horizontal(|ui| {
         for (label, s) in [
-            ("median-gap session", d.median_gap_session),
-            ("biggest-gap session", d.max_gap_session),
+            ("median-gap night", d.median_gap_session),
+            ("biggest-gap night", d.max_gap_session),
         ] {
-            if ui.button(label).clicked() {
+            let active = app.duel.focus_session == Some(s);
+            if ui.selectable_label(active, label).clicked() && !active {
                 app.duel.focus_session = Some(s);
                 app.duel.tracks = None;
                 app.duel.dice = None;
                 app.duel.revealed = f64::MAX;
             }
+        }
+        if let Some(sess) = app.duel.focus_session {
+            ui.label(
+                RichText::new(format!("showing night #{sess}"))
+                    .font(FontId::new(type_scale::CAPTION, theme::mono()))
+                    .color(t.ink2),
+            );
         }
     });
     if let Some(sess) = app.duel.focus_session {

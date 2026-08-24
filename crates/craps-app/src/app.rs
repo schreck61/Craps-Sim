@@ -689,8 +689,58 @@ impl App {
         }
         ui.add_space(10.0);
 
-        // Per-minimum progress lanes in chip order, filling as batches land.
-        if let Some(run) = &self.main_run {
+        // The rail reports the run this screen is about: the Explorer's
+        // sweep in Explorer mode (the Findings lanes have no function
+        // there), the main run's per-minimum lanes everywhere else.
+        if self.mode == Mode::Explorer {
+            if let Some(run) = &self.explore_run {
+                ui.separator();
+                let done = run
+                    .ctl
+                    .sessions_done
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let frac = (done as f32 / run.total_sessions.max(1) as f32).min(1.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("sweep")
+                            .font(FontId::new(type_scale::CAPTION, theme::mono()))
+                            .color(t.ink2),
+                    );
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width() - 26.0, 6.0),
+                        Sense::hover(),
+                    );
+                    ui.painter().rect_filled(rect, 3.0, t.surface2);
+                    let mut fill = rect;
+                    fill.set_width(rect.width() * frac);
+                    ui.painter().rect_filled(fill, 3.0, t.blue);
+                    if frac >= 1.0 {
+                        ui.label(
+                            RichText::new("✓")
+                                .font(FontId::new(type_scale::CAPTION, theme::sans()))
+                                .color(t.gain),
+                        );
+                    }
+                });
+                if frac < 1.0 {
+                    ui.label(
+                        RichText::new(format!(
+                            "{} / {} sessions",
+                            numerals::compact_n(done),
+                            numerals::compact_n(run.total_sessions)
+                        ))
+                        .font(FontId::new(type_scale::CAPTION, theme::mono()))
+                        .color(t.ink2),
+                    );
+                } else if let Some(el) = self.last_elapsed {
+                    ui.label(
+                        RichText::new(format!("finished in {el:.1}s"))
+                            .font(FontId::new(type_scale::CAPTION, theme::mono()))
+                            .color(t.ink2),
+                    );
+                }
+            }
+        } else if let Some(run) = &self.main_run {
             let st = run.store.lock().unwrap();
             let sessions = st.provenance.sessions.max(1);
             ui.separator();

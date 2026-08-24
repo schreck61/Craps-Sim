@@ -434,9 +434,19 @@ fn right_column(app: &mut App, ui: &mut egui::Ui, focus: Option<FragmentId>) {
     section_heading(ui, &t, "Table");
     let r2 = ui.cursor().min;
     // The Chip Toggle (spec §7): canonical minimums as their real chips —
-    // click to include or drop one; the text field remains the +custom path.
+    // click to include or drop one; the text field remains the +custom
+    // path. Custom minimums join the row as chips in their reserve color,
+    // so a $250 is as clickable-off as a $25.
+    const CANONICAL: [i64; 6] = [500, 1000, 1500, 2500, 5000, 10_000];
+    let customs: Vec<i64> = app
+        .cfg
+        .table_mins_cents
+        .iter()
+        .copied()
+        .filter(|m| !CANONICAL.contains(m))
+        .collect();
     ui.horizontal_wrapped(|ui| {
-        for &m in &[500i64, 1000, 1500, 2500, 5000, 10_000] {
+        for &m in CANONICAL.iter().chain(customs.iter()) {
             let on = app.cfg.table_mins_cents.contains(&m);
             let chip = t.chip(m);
             // Tall enough that the amount clears the selection ring — the

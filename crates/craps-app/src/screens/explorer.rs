@@ -115,7 +115,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     super::title(ui, &t, "Explorer");
 
     if app.duel.open {
-        super::duel::show(app, ui);
+        // The Duel is taller than one viewport: it scrolls.
+        egui::ScrollArea::vertical()
+            .id_salt("duel_scroll")
+            .show(ui, |ui| super::duel::show(app, ui));
         return;
     }
 
@@ -171,6 +174,82 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         .font(FontId::new(type_scale::CAPTION, theme::sans()))
         .color(t.ink2),
     );
+
+    // The Duel bar: always visible, so the comparison surface is
+    // discoverable by mouse alone — click picks A, shift-click picks B,
+    // and the button (or D) opens it.
+    ui.horizontal(|ui| {
+        let cap = FontId::new(type_scale::CAPTION, theme::sans());
+        match (app.explorer_ui.selected_a, app.explorer_ui.selected_b) {
+            (None, _) => {
+                ui.label(
+                    RichText::new(
+                        "Duel: click any combo to pick side A, ⇧-click another for side B — both replay identical dice.",
+                    )
+                    .font(cap)
+                    .color(t.ink2),
+                );
+            }
+            (Some(a), None) => {
+                ui.label(
+                    RichText::new(format!("Duel · A: {}", super::duel::combo_name(&a)))
+                        .font(cap.clone())
+                        .color(t.chip(a.min_cents)),
+                );
+                ui.label(
+                    RichText::new("— ⇧-click another combo for side B")
+                        .font(cap)
+                        .color(t.ink2),
+                );
+            }
+            (Some(a), Some(b)) => {
+                ui.label(
+                    RichText::new(format!("Duel · A: {}", super::duel::combo_name(&a)))
+                        .font(cap.clone())
+                        .color(t.chip(a.min_cents)),
+                );
+                ui.label(
+                    RichText::new(format!("vs B: {}", super::duel::combo_name(&b)))
+                        .font(cap.clone())
+                        .color(t.violet),
+                );
+                if a.min_index == b.min_index {
+                    if ui
+                        .button(
+                            RichText::new("Open the Duel ▶")
+                                .font(FontId::new(type_scale::CAPTION, theme::sans_semibold())),
+                        )
+                        .on_hover_text("key D")
+                        .clicked()
+                    {
+                        let ex = std::mem::take(&mut app.explorer_ui);
+                        app.duel.open_from_selection(&ex);
+                        app.explorer_ui = ex;
+                    }
+                } else {
+                    ui.label(
+                        RichText::new("— both sides must share a table minimum")
+                            .font(cap)
+                            .color(t.amber),
+                    );
+                }
+            }
+        }
+        if app.explorer_ui.selected_a.is_some() {
+            let clear = ui.add(
+                egui::Label::new(
+                    RichText::new("clear")
+                        .font(FontId::new(type_scale::CAPTION, theme::sans()))
+                        .color(t.blue),
+                )
+                .sense(egui::Sense::click()),
+            );
+            if clear.clicked() {
+                app.explorer_ui.selected_a = None;
+                app.explorer_ui.selected_b = None;
+            }
+        }
+    });
     ui.add_space(6.0);
 
     if st.mins.is_empty() {
