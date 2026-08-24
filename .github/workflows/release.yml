@@ -5,6 +5,13 @@ name: Release
 # them to a draft GitHub Release for review before publishing.
 #
 #   git tag v0.1.0 && git push origin v0.1.0
+#
+# The macOS build is packaged as a signed, notarized, stapled .app inside a
+# drag-to-Applications DMG when the signing secrets are configured
+# (MACOS_CERT_P12, MACOS_CERT_PASSWORD, APPLE_TEAM_ID, NOTARY_KEY_P8,
+# NOTARY_KEY_ID, NOTARY_ISSUER_ID); without them — e.g. on forks — it falls
+# back to the unsigned tar.gz. A workflow_dispatch run builds and uploads
+# artifacts without creating a release, useful for dry-running the pipeline.
 
 on:
   push:
@@ -38,6 +45,8 @@ jobs:
             target: x86_64-unknown-linux-gnu
             archive: tar
     runs-on: ${{ matrix.os }}
+    env:
+      MACOS_SIGN: ${{ matrix.target == 'aarch64-apple-darwin' && secrets.MACOS_CERT_P12 != '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -69,8 +78,112 @@ jobs:
           cargo install cargo-bundle-licenses --locked
           python3 tools/generate_attributions.py THIRD-PARTY-LICENSES.md
 
+      # ---------------- Signed macOS path ----------------
+
+      - name: Build .app bundle
+        if: env.MACOS_SIGN == 'true'
+        run: |
+          APP="Craps-Sim.app"
+          VERSION="${GITHUB_REF_NAME#v}"
+          case "$VERSION" in
+            [0-9]*) ;;
+            *) VERSION="0.0.0" ;; # workflow_dispatch dry-runs build from a branch
+          esac
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp "target/${{ matrix.target }}/release/${APP_NAME}" "$APP/Contents/MacOS/"
+          cat > "$APP/Contents/Info.plist" << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleIdentifier</key><string>com.schreck61.craps-sim</string>
+            <key>CFBundleName</key><string>Craps-Sim</string>
+            <key>CFBundleDisplayName</key><string>Craps-Sim</string>
+            <key>CFBundleExecutable</key><string>${APP_NAME}</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>CFBundleVersion</key><string>${VERSION}</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict></plist>
+          EOF
+
+      - name: Sign, notarize, and staple
+        if: env.MACOS_SIGN == 'true'
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PW: ${{ secrets.MACOS_CERT_PASSWORD }}
+          NOTARY_KEY: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+
+          # Import the certificate into a throwaway keychain the job deletes.
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PW="$(uuidgen)"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$CERT_PW" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PW" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain
+          rm "$RUNNER_TEMP/cert.p12"
+          echo "SIGNING_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+
+          # Sign by certificate hash so the identity's exact name never
+          # needs to be hard-coded.
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | awk '/Developer ID Application/ {print $2; exit}')
+          test -n "$IDENTITY"
+          echo "SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          codesign --force --options runtime --timestamp \
+            --sign "$IDENTITY" Craps-Sim.app
+          codesign --verify --strict --verbose=2 Craps-Sim.app
+
+          # Notarize and staple.
+          echo "$NOTARY_KEY" > "$RUNNER_TEMP/AuthKey.p8"
+          ditto -c -k --keepParent Craps-Sim.app "$RUNNER_TEMP/notarize.zip"
+          SUBMIT_JSON=$(xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --key "$RUNNER_TEMP/AuthKey.p8" \
+            --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" \
+            --output-format json --wait --timeout 20m)
+          echo "$SUBMIT_JSON"
+          STATUS=$(echo "$SUBMIT_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')
+          SUB_ID=$(echo "$SUBMIT_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "Notarization failed with status: $STATUS — full log follows"
+            xcrun notarytool log "$SUB_ID" \
+              --key "$RUNNER_TEMP/AuthKey.p8" \
+              --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER"
+            exit 1
+          fi
+          xcrun stapler staple Craps-Sim.app
+          xcrun stapler validate Craps-Sim.app
+          spctl --assess --type execute --verbose Craps-Sim.app
+
+      - name: Package (signed DMG)
+        if: env.MACOS_SIGN == 'true'
+        run: |
+          set -euo pipefail
+          STAGE="$RUNNER_TEMP/dmg"
+          mkdir -p "$STAGE"
+          cp -R Craps-Sim.app "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+          cp LICENSE README.md THIRD-PARTY-NOTICES.md THIRD-PARTY-LICENSES.md "$STAGE/"
+          cp -R licenses "$STAGE/licenses"
+          DMG="${APP_NAME}-${GITHUB_REF_NAME}-${{ matrix.label }}.dmg"
+          hdiutil create -volname "Craps-Sim" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+          codesign --timestamp --sign "$SIGNING_IDENTITY" "$DMG"
+          echo "ASSET=$DMG" >> "$GITHUB_ENV"
+
+      # ---------------- Unsigned paths ----------------
+
       - name: Package (tar.gz)
-        if: matrix.archive == 'tar'
+        if: matrix.archive == 'tar' && env.MACOS_SIGN != 'true'
         shell: bash
         run: |
           STAGE="${APP_NAME}-${GITHUB_REF_NAME}-${{ matrix.label }}"
@@ -99,6 +212,14 @@ jobs:
           name: ${{ matrix.label }}
           path: ${{ env.ASSET }}
           if-no-files-found: error
+
+      - name: Remove signing keychain
+        if: always() && env.MACOS_SIGN == 'true'
+        run: |
+          if [ -n "${SIGNING_KEYCHAIN:-}" ]; then
+            security delete-keychain "$SIGNING_KEYCHAIN" || true
+          fi
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
 
   release:
     name: Create GitHub Release

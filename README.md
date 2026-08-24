@@ -61,13 +61,14 @@ draws a fresh seed, so repeated runs give independent samples.
 
 ## Installing
 
-Download the archive for your platform from the
-[Releases](https://github.com/schreck61/Craps-Sim/releases) page
-(Windows x86_64, macOS Apple Silicon, Linux x86_64), unpack it, and run the
-`craps-sim` binary.
+Download your platform's file from the
+[Releases](https://github.com/schreck61/Craps-Sim/releases) page:
 
-> macOS note: release binaries are not code-signed. The first launch may
-> require right-click → Open, or `xattr -d com.apple.quarantine craps-sim`.
+- **macOS (Apple Silicon)**: open the `.dmg` and drag Craps-Sim to
+  Applications. The app is Developer ID signed and notarized by Apple, so it
+  launches without warnings.
+- **Windows (x86_64)** and **Linux (x86_64)**: unpack the archive and run the
+  `craps-sim` binary.
 
 ## Building from source
 
