@@ -5,6 +5,33 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-08-24
+
+### Fixed
+
+- A fresh Duel opened its replayed night at roll zero — an empty
+  trajectory panel until a session pick was clicked. It now opens fully
+  revealed.
+- The trajectory chart's "population envelope · sampled n" provenance
+  line was drawn on the bottom paint layer, where every wealth track
+  painted over it; it now sits above the data on a legible pill.
+- Hexbin cells were culled by center only, letting edge hexes overhang
+  the axis gutters onto the tick numbers; they are now culled by their
+  full extent.
+
+### Changed
+
+- Every label that can sit on data marks now draws on a near-opaque
+  ground pill, following an audit of all text-over-chart sites: the
+  Explorer strip's hover readout; survival line-end, censor, and probe
+  labels; the histogram's log-scale note, house-gap caption, pinned
+  edge, brush mass, and tie-verdict banner; trajectory drift, mean,
+  end-tick, and series labels ("night #N" and "bust" also no longer
+  stack); hexbin quadrant counts; ladder percentile, 1×, and mean labels
+  (the mean drops a row when it sits near 1×, and the paired ladder
+  skips labels that would crowd); the Stake budget and confidence
+  readouts; the ghost panel's copy; and Design's blended-edge label.
+
 ## [0.4.1] - 2026-08-24
 
 ### Fixed
