@@ -85,6 +85,10 @@ impl DuelState {
                 self.tracks = None;
                 self.dice = None;
                 self.focus_session = None;
+                // Fresh-load sentinel: the replayed night opens fully
+                // revealed (derive(Default) would leave 0.0 = roll zero,
+                // an EMPTY trajectory panel).
+                self.revealed = f64::MAX;
             }
         }
     }
@@ -189,6 +193,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             app.duel.focus_session = Some(d.median_gap_session);
             app.duel.tracks = None;
             app.duel.dice = None;
+            app.duel.revealed = f64::MAX;
         }
     }
     let Some(d) = guard.as_ref() else {

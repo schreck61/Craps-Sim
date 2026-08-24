@@ -82,7 +82,8 @@ pub fn paint(cx: &mut ChartCx<'_>, series: &[SurvivalSeries], opt: &SurvivalOpti
         cx.line(Layer::Data, pts, stroke);
         // Line-end label.
         if let Some(&(x, sv)) = s.points.last() {
-            cx.text(
+            // On a pill: the anchor IS the curve's end point.
+            cx.text_pilled(
                 Layer::Annotation,
                 Pos2::new(
                     cx.x.to_screen(x).min(cx.rect.right() - 4.0),
@@ -97,6 +98,7 @@ pub fn paint(cx: &mut ChartCx<'_>, series: &[SurvivalSeries], opt: &SurvivalOpti
                 } else {
                     t.dimmed(s.color)
                 },
+                t.pill(),
             );
         }
     }
@@ -135,13 +137,14 @@ pub fn paint(cx: &mut ChartCx<'_>, series: &[SurvivalSeries], opt: &SurvivalOpti
         let y0 = cx.y.to_screen(*frac);
         let rect = egui::Rect::from_min_max(Pos2::new(x0, y0), Pos2::new(x1, inner_bottom));
         marks::hatch(cx, Layer::Grid, rect, t.hairline_strong);
-        cx.text(
+        cx.text_pilled(
             Layer::Annotation,
             Pos2::new(x1 - 2.0, y0 - 4.0),
             Align2::RIGHT_BOTTOM,
             label,
             FontId::new(type_scale::CAPTION, theme::mono()),
             t.ink2,
+            t.pill(),
         );
     }
 
@@ -153,13 +156,14 @@ pub fn paint(cx: &mut ChartCx<'_>, series: &[SurvivalSeries], opt: &SurvivalOpti
             cx.rect.top() + 8.0,
         );
         for (k, line) in lines.iter().enumerate() {
-            cx.text(
+            cx.text_pilled(
                 Layer::Overlay,
                 anchor + egui::vec2(0.0, k as f32 * 14.0),
                 Align2::LEFT_TOP,
                 line,
                 FontId::new(type_scale::CAPTION, theme::mono()),
                 t.ink,
+                t.pill(),
             );
         }
     }

@@ -80,8 +80,11 @@ pub fn paint(cx: &mut ChartCx<'_>, tracks: &[Trajectory<'_>], o: &TrajectoryOpti
         };
         let (u, l) = band(0, 4);
         cx.mesh(Layer::Ribbon, marks::band_mesh(&u, &l, t.ci_band(t.ink2)));
-        cx.text(
-            Layer::Ribbon,
+        // Annotation, not Ribbon: on the bottom layer this provenance
+        // line was painted over by every track. Pilled — it sits where
+        // the envelope's upper edge runs.
+        cx.text_pilled(
+            Layer::Annotation,
             Pos2::new(cx.rect.right() - 8.0, cx.rect.top() + 16.0),
             Align2::RIGHT_TOP,
             format!(
@@ -91,6 +94,7 @@ pub fn paint(cx: &mut ChartCx<'_>, tracks: &[Trajectory<'_>], o: &TrajectoryOpti
             ),
             FontId::new(type_scale::CAPTION, theme::mono()),
             t.ink2,
+            t.pill(),
         );
     }
 
@@ -102,13 +106,14 @@ pub fn paint(cx: &mut ChartCx<'_>, tracks: &[Trajectory<'_>], o: &TrajectoryOpti
             clampy(cx.y.to_screen(start + drift * rolls as f64)),
         );
         cx.line(Layer::Estimate, vec![p0, p1], Stroke::new(1.2, t.amber));
-        cx.text(
+        cx.text_pilled(
             Layer::Estimate,
             p1 + egui::vec2(-4.0, -20.0),
             Align2::RIGHT_BOTTOM,
             "expected drift — closed form",
             FontId::new(type_scale::CAPTION, theme::mono()),
             t.amber,
+            t.pill(),
         );
     } else if let (Some(env), Some(label)) = (o.envelope, &o.simulated_mean_label) {
         // The envelope's center path in secondary ink, labeled honestly.
@@ -126,13 +131,15 @@ pub fn paint(cx: &mut ChartCx<'_>, tracks: &[Trajectory<'_>], o: &TrajectoryOpti
             })
             .collect();
         cx.line(Layer::Estimate, med, Stroke::new(1.0, t.ink2));
-        cx.text(
+        // One row below the envelope disclosure (both render at once).
+        cx.text_pilled(
             Layer::Estimate,
-            Pos2::new(cx.rect.right() - 4.0, cx.rect.top() + 18.0),
+            Pos2::new(cx.rect.right() - 4.0, cx.rect.top() + 34.0),
             Align2::RIGHT_TOP,
             label,
             FontId::new(type_scale::CAPTION, theme::mono()),
             t.ink2,
+            t.pill(),
         );
     }
 
@@ -184,27 +191,30 @@ pub fn paint(cx: &mut ChartCx<'_>, tracks: &[Trajectory<'_>], o: &TrajectoryOpti
                     vec![Pos2::new(x, last - 10.0), Pos2::new(x, last + 10.0)],
                     Stroke::new(2.0, *color),
                 );
-                cx.text(
+                cx.text_pilled(
                     Layer::Annotation,
                     Pos2::new(x - 4.0, last - 12.0),
                     Align2::RIGHT_BOTTOM,
                     label,
                     FontId::new(type_scale::CAPTION, theme::mono()),
                     *color,
+                    t.pill(),
                 );
             }
         }
-        // Series label at line end.
-        cx.text(
+        // Series label at line end, one row above the end-tick label so
+        // "night #N" and "bust" never stack on each other.
+        cx.text_pilled(
             Layer::Annotation,
             Pos2::new(
                 cx.x.to_screen(revealed as f64).min(cx.rect.right() - 4.0),
-                (last - 14.0).max(cx.rect.top() + 2.0),
+                (last - 26.0).max(cx.rect.top() + 2.0),
             ),
             Align2::RIGHT_BOTTOM,
             &tr.label,
             FontId::new(type_scale::CAPTION, theme::mono()),
             tr.color,
+            t.pill(),
         );
     }
 }

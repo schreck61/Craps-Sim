@@ -797,7 +797,7 @@ pub fn stake_chart(app: &mut App, ui: &mut egui::Ui, st: &RunStore, focused: usi
             lx,
             egui::Stroke::new(2.0, t.amber),
         );
-        cx.text(
+        cx.text_pilled(
             crate::chart::Layer::Annotation,
             egui::Pos2::new(lx + 4.0, cx.rect.top() + 2.0),
             egui::Align2::LEFT_TOP,
@@ -808,6 +808,7 @@ pub fn stake_chart(app: &mut App, ui: &mut egui::Ui, st: &RunStore, focused: usi
             ),
             egui::FontId::new(11.0, crate::ui::theme::mono()),
             t.amber,
+            t.pill(),
         );
 
         // Confidence handle riding the y-axis, detents at 90/95/99.
@@ -837,7 +838,7 @@ pub fn stake_chart(app: &mut App, ui: &mut egui::Ui, st: &RunStore, focused: usi
             hy,
             egui::Stroke::new(1.0, t.blue),
         );
-        cx.text(
+        cx.text_pilled(
             crate::chart::Layer::Overlay,
             egui::Pos2::new(cx.rect.right() - 4.0, hy - 4.0),
             egui::Align2::RIGHT_BOTTOM,
@@ -847,6 +848,7 @@ pub fn stake_chart(app: &mut App, ui: &mut egui::Ui, st: &RunStore, focused: usi
             ),
             egui::FontId::new(11.0, crate::ui::theme::mono()),
             t.blue,
+            t.pill(),
         );
 
         // Bidirectional linkage with the inverse insight card: its dot on

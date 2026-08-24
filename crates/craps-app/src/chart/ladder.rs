@@ -38,13 +38,14 @@ pub fn paint(cx: &mut ChartCx<'_>, ladder: &Ladder<'_>) {
         vec![Pos2::new(bx, y - 12.0), Pos2::new(bx, y + 12.0)],
         Stroke::new(1.0, t.hairline_strong),
     );
-    cx.text(
+    cx.text_pilled(
         Layer::Annotation,
         Pos2::new(bx, y + 14.0),
         Align2::CENTER_TOP,
         "1×",
         FontId::new(type_scale::CAPTION, theme::mono()),
         t.ink2,
+        t.pill(),
     );
 
     for (k, &d) in ladder.deciles.iter().enumerate() {
@@ -56,24 +57,34 @@ pub fn paint(cx: &mut ChartCx<'_>, ladder: &Ladder<'_>) {
             Stroke::new(if is_median { 2.2 } else { 1.2 }, t.ink),
         );
         if k == 0 || is_median || k == 8 {
-            cx.text(
+            cx.text_pilled(
                 Layer::Annotation,
                 Pos2::new(x, y - 10.0),
                 Align2::CENTER_BOTTOM,
                 format!("P{} {}", (k + 1) * 10, numerals::money_text(d, false)),
                 FontId::new(type_scale::CAPTION, theme::mono()),
                 t.ink2,
+                t.pill(),
             );
         }
     }
     marks::mean_diamond(cx, Pos2::new(cx.x.to_screen(ladder.mean), y), 5.0);
-    cx.text(
+    // A row lower when the mean sits near 1× budget (the common case),
+    // so "mean" and "1×" never print on top of each other.
+    let mean_x = cx.x.to_screen(ladder.mean);
+    let mean_y = if (mean_x - bx).abs() < 40.0 {
+        y + 28.0
+    } else {
+        y + 14.0
+    };
+    cx.text_pilled(
         Layer::Annotation,
-        Pos2::new(cx.x.to_screen(ladder.mean), y + 14.0),
+        Pos2::new(mean_x, mean_y),
         Align2::CENTER_TOP,
         "mean",
         FontId::new(type_scale::CAPTION, theme::mono()),
         t.amber,
+        t.pill(),
     );
 }
 
@@ -112,6 +123,7 @@ pub fn paint_paired(cx: &mut ChartCx<'_>, p: &PairedLadder<'_>) {
             color,
         );
     }
+    let mut last_label_y = f32::MIN;
     for k in 0..9 {
         let ya = cx.y.to_screen(p.a[k] as f64);
         let yb = cx.y.to_screen(p.b[k] as f64);
@@ -132,13 +144,19 @@ pub fn paint_paired(cx: &mut ChartCx<'_>, p: &PairedLadder<'_>) {
             vec![Pos2::new(xa + 8.0, ya), Pos2::new(xb - 8.0, yb)],
             Stroke::new(1.0, t.hairline_strong),
         );
-        cx.text(
-            Layer::Annotation,
-            Pos2::new(xa - 12.0, ya),
-            Align2::RIGHT_CENTER,
-            format!("P{}", (k + 1) * 10),
-            FontId::new(type_scale::CAPTION, theme::mono()),
-            t.ink2,
-        );
+        // Tight distributions bunch the rungs; a label prints only when
+        // it clears the previous one (the median always prints).
+        if k == 4 || (ya - last_label_y).abs() >= 11.0 {
+            last_label_y = ya;
+            cx.text_pilled(
+                Layer::Annotation,
+                Pos2::new(xa - 12.0, ya),
+                Align2::RIGHT_CENTER,
+                format!("P{}", (k + 1) * 10),
+                FontId::new(type_scale::CAPTION, theme::mono()),
+                t.ink2,
+                t.pill(),
+            );
+        }
     }
 }

@@ -114,13 +114,25 @@ pub fn ghost_panel_with_house_line(
             t.amber,
         );
     }
-    p.text(
-        egui::pos2(rect.center().x, rect.center().y + 40.0),
-        egui::Align2::CENTER_CENTER,
-        copy,
+    // On a ground pill: the house line's x resolves near center for any
+    // realistic configuration and would slice through the sentence.
+    let galley = p.layout_no_wrap(
+        copy.to_owned(),
         FontId::new(type_scale::STORY, theme::sans_medium()),
         t.ink2,
     );
+    let pos = egui::Align2::CENTER_CENTER
+        .anchor_size(
+            egui::pos2(rect.center().x, rect.center().y + 40.0),
+            galley.size(),
+        )
+        .min;
+    p.rect_filled(
+        egui::Rect::from_min_size(pos, galley.size()).expand2(egui::vec2(6.0, 3.0)),
+        4.0,
+        t.pill(),
+    );
+    p.galley(pos, galley, t.ink2);
 }
 
 /// Screen title in the display face.

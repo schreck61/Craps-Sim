@@ -314,10 +314,10 @@ fn histogram_shapes_golden() {
             ("LineSegment", 46),
             ("Mesh", 1),
             ("Path", 21),
-            ("Rect", 12),
+            ("Rect", 15),
             ("Text", 36),
         ],
-        0x917A_6E3B_C0FE_94A0,
+        0xEEEA_EA33_61DE_B423,
         "histogram golden",
     );
 }
@@ -362,8 +362,8 @@ fn survival_shapes_golden() {
     });
     assert_golden(
         got,
-        &[("LineSegment", 99), ("Path", 22), ("Rect", 5), ("Text", 37)],
-        0xB25F_F27E_41CC_B2DF,
+        &[("LineSegment", 99), ("Path", 22), ("Rect", 9), ("Text", 37)],
+        0x09FF_B55A_A0FA_1D04,
         "survival golden",
     );
 }
@@ -388,8 +388,8 @@ fn ladder_shapes_golden() {
     });
     assert_golden(
         got,
-        &[("Path", 14), ("Rect", 3), ("Text", 8)],
-        0x0136_72D3_256F_A15D,
+        &[("Path", 14), ("Rect", 8), ("Text", 8)],
+        0x6643_D807_B783_DD25,
         "ladder golden",
     );
 }

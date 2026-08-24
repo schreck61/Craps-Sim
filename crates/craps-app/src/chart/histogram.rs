@@ -93,7 +93,7 @@ pub fn paint(cx: &mut ChartCx<'_>, d: &HistogramData<'_>, o: &HistogramOverlays)
     });
     if o.log_y {
         axis::y_axis(cx, |v| numerals::compact_n(v as u64));
-        cx.text(
+        cx.text_pilled(
             Layer::Annotation,
             Pos2::new(
                 cx.rect.left() + axis::MARGIN_LEFT + 4.0,
@@ -103,6 +103,7 @@ pub fn paint(cx: &mut ChartCx<'_>, d: &HistogramData<'_>, o: &HistogramOverlays)
             "log scale — visually shrinks ruin; you opted in",
             FontId::new(type_scale::CAPTION, theme::sans()),
             t.amber,
+            t.pill(),
         );
     } else {
         axis::y_axis(cx, |v| numerals::compact_n(v as u64));
@@ -234,13 +235,14 @@ pub fn paint(cx: &mut ChartCx<'_>, d: &HistogramData<'_>, o: &HistogramOverlays)
         cx.vline(Layer::Estimate, sx, Stroke::new(1.2, t.amber));
         labeled_line(cx, sx, 0.0, label.trim(), t.amber);
         if let Some(cap) = &o.house_gap_caption {
-            cx.text(
+            cx.text_pilled(
                 Layer::Annotation,
                 Pos2::new(cx.rect.right() - 8.0, inner_bottom - 30.0),
                 Align2::RIGHT_BOTTOM,
                 cap,
                 FontId::new(type_scale::CAPTION, theme::sans()),
                 t.ink2,
+                t.pill(),
             );
         }
     }
@@ -251,7 +253,7 @@ pub fn paint(cx: &mut ChartCx<'_>, d: &HistogramData<'_>, o: &HistogramOverlays)
     }
     if let Some(label) = &o.pinned_edge_label {
         // Pinned to the frame, not the data: it CANNOT drift.
-        cx.text(
+        cx.text_pilled(
             Layer::Estimate,
             Pos2::new(
                 cx.rect.right() - 8.0,
@@ -261,6 +263,7 @@ pub fn paint(cx: &mut ChartCx<'_>, d: &HistogramData<'_>, o: &HistogramOverlays)
             label,
             label_font.clone(),
             t.amber,
+            t.pill(),
         );
     }
     if let Some((x, label)) = &o.loss_pin {
@@ -269,13 +272,14 @@ pub fn paint(cx: &mut ChartCx<'_>, d: &HistogramData<'_>, o: &HistogramOverlays)
         labeled_line(cx, sx + 6.0, 1.0, label, t.amber);
     }
     if let Some(label) = &o.brush_label {
-        cx.text(
+        cx.text_pilled(
             Layer::Overlay,
             Pos2::new(cx.rect.center().x, cx.rect.top() + 4.0),
             Align2::CENTER_TOP,
             label,
             FontId::new(type_scale::BODY, theme::mono()),
             t.blue,
+            t.pill(),
         );
     }
 }
@@ -339,13 +343,14 @@ pub fn paint_diff(cx: &mut ChartCx<'_>, d: &DiffHistogram<'_>) {
             ),
             with_alpha(t.ink2, 40),
         );
-        cx.text(
+        cx.text_pilled(
             Layer::Annotation,
             Pos2::new(cx.rect.center().x, cx.rect.top() + 8.0),
             Align2::CENTER_TOP,
             &d.tie_label,
             FontId::new(type_scale::SECTION, theme::sans_semibold()),
             t.ink2,
+            t.pill(),
         );
     }
     // Bold zero.

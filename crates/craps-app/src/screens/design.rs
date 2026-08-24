@@ -250,13 +250,25 @@ fn bet_rail(app: &mut App, ui: &mut egui::Ui, focus: Option<FragmentId>) {
                 2.0,
                 t.amber,
             );
-            ui.painter().text(
-                rect.right_center() + egui::vec2(-2.0, 0.0),
-                Align2::RIGHT_CENTER,
+            // On a ground pill: at extreme blended edges the amber bar
+            // reaches the label and amber-on-amber is invisible.
+            let bl_galley = ui.painter().layout_no_wrap(
                 format!("blended {}", numerals::edge_pct(e)),
                 FontId::new(type_scale::CAPTION, theme::mono()),
                 t.amber,
             );
+            let bl_pos = Align2::RIGHT_CENTER
+                .anchor_size(
+                    rect.right_center() + egui::vec2(-2.0, 0.0),
+                    bl_galley.size(),
+                )
+                .min;
+            ui.painter().rect_filled(
+                egui::Rect::from_min_size(bl_pos, bl_galley.size()).expand2(egui::vec2(3.0, 1.0)),
+                3.0,
+                t.pill(),
+            );
+            ui.painter().galley(bl_pos, bl_galley, t.amber);
             ui.label(
                 RichText::new("Every dollar you put down costs this on average, no matter what.")
                     .font(FontId::new(type_scale::CAPTION, theme::sans()))

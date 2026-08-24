@@ -40,7 +40,14 @@ pub fn paint(cx: &mut ChartCx<'_>, p: &HexbinPlot<'_>) {
 
     for b in p.bins {
         let cxy = cx.xy(b.center_x, b.center_y);
-        if cxy.y < cx.rect.top() || cxy.y > inner_bottom {
+        // Cull on the hex's full extent: center-only tests let edge hexes
+        // overhang into the axis gutters and sit on the tick labels.
+        let rx = size_px * 3f32.sqrt() / 2.0;
+        if cxy.y - size_px < cx.rect.top()
+            || cxy.y + size_px > inner_bottom
+            || cxy.x - rx < cx.rect.left() + axis::MARGIN_LEFT
+            || cxy.x + rx > cx.rect.right() - 8.0
+        {
             continue;
         }
         let k = (b.count as f32 / max_count).powf(0.5);
@@ -67,15 +74,16 @@ pub fn paint(cx: &mut ChartCx<'_>, p: &HexbinPlot<'_>) {
 
     // Quadrant counts printed in the corners.
     let (a_hi, b_hi, tie) = p.quadrants;
-    cx.text(
+    cx.text_pilled(
         Layer::Annotation,
         Pos2::new(cx.rect.right() - 6.0, inner_bottom - 6.0),
         Align2::RIGHT_BOTTOM,
         format!("{} higher: {}", p.a_label, numerals::compact_n(a_hi)),
         FontId::new(type_scale::CAPTION, theme::mono()),
         t.ink,
+        t.pill(),
     );
-    cx.text(
+    cx.text_pilled(
         Layer::Annotation,
         Pos2::new(
             cx.rect.left() + axis::MARGIN_LEFT + 6.0,
@@ -85,14 +93,16 @@ pub fn paint(cx: &mut ChartCx<'_>, p: &HexbinPlot<'_>) {
         format!("{} higher: {}", p.b_label, numerals::compact_n(b_hi)),
         FontId::new(type_scale::CAPTION, theme::mono()),
         t.ink,
+        t.pill(),
     );
-    cx.text(
+    cx.text_pilled(
         Layer::Annotation,
         Pos2::new(cx.rect.right() - 6.0, cx.rect.top() + 6.0),
         Align2::RIGHT_TOP,
         format!("within $1: {}", numerals::compact_n(tie)),
         FontId::new(type_scale::CAPTION, theme::mono()),
         t.ink2,
+        t.pill(),
     );
 }
 
