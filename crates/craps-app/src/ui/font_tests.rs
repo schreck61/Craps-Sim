@@ -142,8 +142,10 @@ fn name_records(font: &[u8]) -> Vec<(u16, String)> {
         let text = match platform {
             0 | 3 => {
                 let units: Vec<u16> = raw
-                    .chunks_exact(2)
-                    .map(|p| u16::from_be_bytes([p[0], p[1]]))
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|p| u16::from_be_bytes(*p))
                     .collect();
                 String::from_utf16_lossy(&units)
             }

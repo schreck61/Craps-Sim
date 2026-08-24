@@ -228,7 +228,7 @@ fn rasterize_clipped(
             })
             .collect();
 
-        for tri in mesh.indices.chunks_exact(3) {
+        for tri in mesh.indices.as_chunks::<3>().0 {
             fill_triangle(
                 &mut fb,
                 width,
