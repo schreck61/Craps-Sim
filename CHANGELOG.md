@@ -7,12 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-23
+
 ### Added
 
 - macOS releases ship as a signed, notarized, and stapled `Craps-Sim.app`
   in a drag-to-Applications DMG; Gatekeeper accepts first launch without
   warnings. Builds without signing secrets (e.g. forks) fall back to the
   unsigned tar.gz.
+- A roll-by-roll session trace harness for inspecting individual sessions
+  (`TRACE_MIN`/`TRACE_SEEDS` with the ignored `trace_session` test).
 
 ## [0.2.0] - 2026-08-22
 
