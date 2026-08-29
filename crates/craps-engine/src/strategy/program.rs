@@ -58,6 +58,13 @@ pub enum Op {
     SetVar(u16),
     /// Pop the amount (unless the kind needs none) and propose the bet.
     Bet(BetRef, AmountKind),
+    /// Pop the amount and propose a new stake, raising only.
+    Press(BetRef, AmountKind),
+    /// Pop the amount and propose a new stake, lowering only.
+    Regress(BetRef, AmountKind),
+    Down(BetRef),
+    Working(BetRef, bool),
+    Leave,
 }
 
 /// The half of an [`AmountExpr`] that survives compilation: the shape, with
@@ -236,6 +243,26 @@ impl Default for StratState {
     }
 }
 
+/// One thing a decision decided to ask the table for. Buffered rather than
+/// applied as it is produced, so that every rule in a decision reads the
+/// same state.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Proposal {
+    Bet(BetRef, Amount),
+    /// A stake change, with the direction the rule asked for: a `press` that
+    /// would lower the bet is not a press, and does nothing.
+    Stake(BetRef, Amount, Direction),
+    Down(BetRef),
+    Working(BetRef, bool),
+    Leave,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Direction {
+    Up,
+    Down,
+}
+
 /// The proposal buffer: what a decision produced, before the table sees it.
 ///
 /// It lives on the session rather than on the stack of each decision.
@@ -244,14 +271,14 @@ impl Default for StratState {
 /// interpreter when it was measured.
 #[derive(Clone, Copy, Debug)]
 pub struct Proposals {
-    items: [(BetRef, Amount); MAX_ACTIONS],
+    items: [Proposal; MAX_ACTIONS],
     len: usize,
 }
 
 impl Default for Proposals {
     fn default() -> Self {
         Self {
-            items: [(BetRef::Pass, Amount::Base); MAX_ACTIONS],
+            items: [Proposal::Bet(BetRef::Pass, Amount::Base); MAX_ACTIONS],
             len: 0,
         }
     }
@@ -259,9 +286,9 @@ impl Default for Proposals {
 
 impl Proposals {
     #[inline]
-    fn push(&mut self, bet: BetRef, amount: Amount) {
+    fn push(&mut self, p: Proposal) {
         if self.len < MAX_ACTIONS {
-            self.items[self.len] = (bet, amount);
+            self.items[self.len] = p;
             self.len += 1;
         }
     }
@@ -307,8 +334,29 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
             evaluate(&view, p, &mut self.strat, d, &mut self.proposals);
         }
         for i in 0..self.proposals.len {
-            let (bet, amount) = self.proposals.items[i];
-            let _ = self.apply(Action::Bet(bet, amount));
+            let action = match self.proposals.items[i] {
+                Proposal::Bet(b, a) => Action::Bet(b, a),
+                Proposal::Down(b) => Action::Down(b),
+                Proposal::Working(b, on) => Action::Working(b, on),
+                Proposal::Leave => Action::Leave,
+                Proposal::Stake(b, a, dir) => {
+                    // `press` and `regress` each mean one direction. The
+                    // table is told the target; the direction is checked
+                    // here, against the layout as it stands after the
+                    // proposals before this one.
+                    let cur = self.current_stake_of(b);
+                    let target = self.resolve_target(b, a);
+                    let wrong_way = match dir {
+                        Direction::Up => target <= cur,
+                        Direction::Down => target >= cur,
+                    };
+                    if wrong_way {
+                        continue;
+                    }
+                    Action::SetStake(b, a)
+                }
+            };
+            let _ = self.apply(action);
         }
     }
 }
@@ -380,6 +428,18 @@ fn evaluate(
                 let v = pop!();
                 st.vars[i as usize] = v;
             }
+            Op::Down(bet) => out.push(Proposal::Down(bet)),
+            Op::Working(bet, on) => out.push(Proposal::Working(bet, on)),
+            Op::Leave => out.push(Proposal::Leave),
+            Op::Press(bet, kind) | Op::Regress(bet, kind) => {
+                let value = if kind.takes_operand() { pop!() } else { 0 };
+                let dir = if matches!(p.ops[pc], Op::Press(..)) {
+                    Direction::Up
+                } else {
+                    Direction::Down
+                };
+                out.push(Proposal::Stake(bet, amount_of(kind, value), dir));
+            }
             Op::Bet(bet, kind) => {
                 // A flat that is already working is a no-op at the table, so
                 // there is no reason to walk it all the way there. Odds are
@@ -390,19 +450,21 @@ fn evaluate(
                     continue;
                 }
                 let value = if kind.takes_operand() { pop!() } else { 0 };
-                out.push(
-                    bet,
-                    match kind {
-                        AmountKind::Base => Amount::Base,
-                        AmountKind::Pressed => Amount::Pressed,
-                        AmountKind::Units => Amount::Units(value),
-                        AmountKind::Cents => Amount::Cents(value),
-                        AmountKind::MaxOdds => Amount::MaxOdds,
-                    },
-                );
+                out.push(Proposal::Bet(bet, amount_of(kind, value)));
             }
         }
         pc += 1;
+    }
+}
+
+#[inline]
+fn amount_of(kind: AmountKind, value: i64) -> Amount {
+    match kind {
+        AmountKind::Base => Amount::Base,
+        AmountKind::Pressed => Amount::Pressed,
+        AmountKind::Units => Amount::Units(value),
+        AmountKind::Cents => Amount::Cents(value),
+        AmountKind::MaxOdds => Amount::MaxOdds,
     }
 }
 

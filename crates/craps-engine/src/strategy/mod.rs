@@ -16,6 +16,7 @@
 pub mod action;
 pub mod ast;
 pub mod compile;
+mod examples;
 pub mod library;
 pub mod player;
 pub mod program;

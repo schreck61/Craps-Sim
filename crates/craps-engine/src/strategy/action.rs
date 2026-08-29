@@ -75,6 +75,24 @@ pub enum Action {
     /// Idempotent: asking for a bet that is already up is a no-op, not a
     /// rejection.
     Bet(BetRef, Amount),
+    /// Move a working bet to a new stake, taking the difference from the
+    /// rail or returning it. This is the decision-point counterpart to a
+    /// progression, which presses at resolution; when both touch the same
+    /// bet on the same roll the progression sets the stake first and the
+    /// rule overrides it, the same last-write-wins ordering that governs two
+    /// rules touching one bet.
+    SetStake(BetRef, Amount),
+    /// Take the bet down; the stake comes back to the rail. Refused for
+    /// contract bets, which cannot be removed once the point is on.
+    Down(BetRef),
+    /// Turn a working bet off or back on. An off bet sits on the layout
+    /// resolving nothing — still the player's money, still counted in what
+    /// they would walk away with.
+    Working(BetRef, bool),
+    /// End the session and pick everything up. The take-profit rule in the
+    /// configuration is the Explorer's axis; this is a strategy leaving on
+    /// its own terms, which is how a stop-loss is said.
+    Leave,
 }
 
 /// Why the table refused an action. Every one of these is emitted as a
@@ -86,6 +104,11 @@ pub enum RejectReason {
     /// the come-out, a place bet on the current point, odds with no flat
     /// behind them.
     NotAllowedNow,
+    /// A contract bet: once the point is on it cannot come down, and no
+    /// table will take it back because the player changed their mind.
+    ContractBet,
+    /// Nothing is on this bet to press, take down, or turn off.
+    NothingThere,
     /// The odds policy allows nothing behind this point.
     NoOddsAllowed,
     /// Neither the requested stake nor the base fallback fit the bankroll.
@@ -98,6 +121,8 @@ impl RejectReason {
     pub fn label(&self) -> &'static str {
         match self {
             RejectReason::NotAllowedNow => "not allowed right now",
+            RejectReason::ContractBet => "a contract bet can't come down",
+            RejectReason::NothingThere => "there's nothing on that bet",
             RejectReason::NoOddsAllowed => "odds policy allows none",
             RejectReason::InsufficientBankroll => "bankroll won't cover it",
         }
@@ -140,11 +165,160 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
     pub(crate) fn apply(&mut self, action: Action) -> Adjudication {
         match action {
             Action::Bet(bet, amount) => self.apply_bet(bet, amount),
+            Action::SetStake(bet, amount) => self.apply_set_stake(bet, amount),
+            Action::Down(bet) => self.apply_down(bet),
+            Action::Working(bet, on) => self.apply_working(bet, on),
+            Action::Leave => {
+                self.leaving = true;
+                Ok(0)
+            }
         }
     }
 
+    /// Move a working bet to a new stake. Raising takes the difference from
+    /// the rail; lowering returns it.
+    #[inline(never)]
+    fn apply_set_stake(&mut self, bet: BetRef, amount: Amount) -> Adjudication {
+        if is_odds(bet) {
+            // Odds already top up toward a target, which is the same thing.
+            return self.apply_bet(bet, amount);
+        }
+        let Some(spec) = self.flat_spec(bet) else {
+            return self.reject(bet, RejectReason::NotAllowedNow);
+        };
+        let cur = *self.slot(spec.slot);
+        if cur == 0 {
+            return self.reject(bet, RejectReason::NothingThere);
+        }
+        let want = match amount {
+            Amount::Pressed => self.pressed_stake(bet, spec.base),
+            other => self.resolve_amount(bet, other, spec.base)?,
+        };
+        // A stake below the table's own minimum for this bet is not a stake;
+        // a player who wants nothing there takes it down.
+        let want = want.max(spec.base);
+        if want > cur {
+            match self.try_stake(want - cur) {
+                Some(a) => {
+                    *self.slot_mut(spec.slot) = cur + a;
+                    self.emit(bet_kind(bet), BetEventKind::Placed, a);
+                    Ok(a)
+                }
+                None => self.reject(bet, RejectReason::InsufficientBankroll),
+            }
+        } else if want < cur {
+            let back = cur - want;
+            self.cash += back;
+            *self.slot_mut(spec.slot) = want;
+            self.emit(bet_kind(bet), BetEventKind::TakenDown, back);
+            Ok(0)
+        } else {
+            Ok(0)
+        }
+    }
+
+    /// Take a bet down. The pass line and a come flat are contract bets once
+    /// the point is on: the player is committed, and the table will not give
+    /// it back.
+    #[inline(never)]
+    fn apply_down(&mut self, bet: BetRef) -> Adjudication {
+        if is_odds(bet) {
+            return self.take_down_odds(bet);
+        }
+        if matches!(bet, BetRef::Pass | BetRef::Come) && self.point.is_some() {
+            return self.reject(bet, RejectReason::ContractBet);
+        }
+        let Some(spec) = self.flat_spec(bet) else {
+            return self.reject(bet, RejectReason::NotAllowedNow);
+        };
+        let cur = *self.slot(spec.slot);
+        if cur == 0 {
+            return self.reject(bet, RejectReason::NothingThere);
+        }
+        *self.slot_mut(spec.slot) = 0;
+        self.cash += cur;
+        self.emit(bet_kind(bet), BetEventKind::TakenDown, cur);
+        Ok(0)
+    }
+
+    /// Odds are never contract bets — they come down whenever the player
+    /// asks, which is most of why they are the best bet on the table.
+    #[inline(never)]
+    fn take_down_odds(&mut self, bet: BetRef) -> Adjudication {
+        let (cur, win) = match bet {
+            BetRef::PassOdds => (self.pass_odds, 0),
+            BetRef::DontPassLay => (self.dont_lay, self.dont_lay_win),
+            BetRef::ComeOdds(n) => (place_index(n).map_or(0, |i| self.come_odds[i]), 0),
+            BetRef::DontComeLay(n) => {
+                let i = place_index(n);
+                (
+                    i.map_or(0, |i| self.dc_lay[i]),
+                    i.map_or(0, |i| self.dc_lay_win[i]),
+                )
+            }
+            _ => (0, 0),
+        };
+        let _ = win;
+        if cur == 0 {
+            return self.reject(bet, RejectReason::NothingThere);
+        }
+        match bet {
+            BetRef::PassOdds => self.pass_odds = 0,
+            BetRef::DontPassLay => {
+                self.dont_lay = 0;
+                self.dont_lay_win = 0;
+            }
+            BetRef::ComeOdds(n) => {
+                if let Some(i) = place_index(n) {
+                    self.come_odds[i] = 0;
+                }
+            }
+            BetRef::DontComeLay(n) => {
+                if let Some(i) = place_index(n) {
+                    self.dc_lay[i] = 0;
+                    self.dc_lay_win[i] = 0;
+                }
+            }
+            _ => {}
+        }
+        self.cash += cur;
+        self.emit(bet_kind(bet), BetEventKind::TakenDown, cur);
+        Ok(0)
+    }
+
+    /// Turn a place bet or hardway off or on. Only these can be called off:
+    /// line and come bets are contract bets, odds ride with what they back,
+    /// and a one-roll bet resolves before the question could be asked.
+    #[inline(never)]
+    fn apply_working(&mut self, bet: BetRef, on: bool) -> Adjudication {
+        match bet {
+            BetRef::Place(n) => match place_index(n) {
+                Some(i) => {
+                    self.place_working[i] = on;
+                    Ok(0)
+                }
+                None => self.reject(bet, RejectReason::NotAllowedNow),
+            },
+            BetRef::Hardway(n) => match hard_index(n) {
+                Some(i) => {
+                    self.hard_working[i] = on;
+                    Ok(0)
+                }
+                None => self.reject(bet, RejectReason::NotAllowedNow),
+            },
+            _ => self.reject(bet, RejectReason::NotAllowedNow),
+        }
+    }
+
+    /// The placement arm of [`Session::apply`], reachable directly.
+    ///
+    /// The built-in player only ever places, and routing it through the
+    /// dispatcher meant building an `Action` at twelve call sites purely to
+    /// take it apart again. Compiled strategies still go through `apply`,
+    /// which is where the surface stays honest: this is the same
+    /// adjudication either way.
     #[inline]
-    fn apply_bet(&mut self, bet: BetRef, amount: Amount) -> Adjudication {
+    pub(crate) fn apply_bet(&mut self, bet: BetRef, amount: Amount) -> Adjudication {
         if is_odds(bet) {
             return if self.odds_flat_is_up(bet) {
                 self.apply_odds(bet, amount)
@@ -341,6 +515,57 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
             BetRef::ComeOdds(n) | BetRef::DontComeLay(n) => n,
             _ => self.point.unwrap_or(0),
         }
+    }
+
+    /// What is on this bet now — the slot the table would write, which for
+    /// a come flat is the box and not the numbers.
+    pub(crate) fn current_stake_of(&self, bet: BetRef) -> i64 {
+        match self.flat_spec_any(bet) {
+            Some(spec) => *self.slot(spec.slot),
+            None => match bet {
+                BetRef::PassOdds => self.pass_odds,
+                BetRef::DontPassLay => self.dont_lay,
+                BetRef::ComeOdds(n) => place_index(n).map_or(0, |i| self.come_odds[i]),
+                BetRef::DontComeLay(n) => place_index(n).map_or(0, |i| self.dc_lay[i]),
+                _ => 0,
+            },
+        }
+    }
+
+    /// What a stake proposal would come to, without applying it — so a
+    /// `press` can be told from a `regress` before either reaches the table.
+    pub(crate) fn resolve_target(&mut self, bet: BetRef, amount: Amount) -> i64 {
+        let base = self.flat_spec_any(bet).map_or(self.min, |spec| spec.base);
+        match amount {
+            Amount::Pressed => self.pressed_stake(bet, base),
+            other => self.resolve_amount(bet, other, base).unwrap_or(base),
+        }
+    }
+
+    /// [`Session::flat_spec`] without the legality check — for reading what
+    /// is on a bet, which is a question with an answer whatever the point is
+    /// doing.
+    ///
+    /// Kept separate from [`Session::flat_spec`] rather than shared with
+    /// it: the placement path is the hot one, and folding the two together
+    /// cost it a call it did not need. A little duplication in two matches
+    /// over the same enum is the cheaper trade, and the compiler checks
+    /// both are exhaustive.
+    #[inline(never)]
+    fn flat_spec_any(&self, bet: BetRef) -> Option<FlatSpec> {
+        let (slot, base) = match bet {
+            BetRef::Pass => (Slot::Pass, self.min),
+            BetRef::DontPass => (Slot::DontPass, self.min),
+            BetRef::Come => (Slot::Come, self.min),
+            BetRef::DontCome => (Slot::DontCome, self.min),
+            BetRef::Field => (Slot::Field, self.min),
+            BetRef::Place(n) => (Slot::Place(place_index(n)?), place_stake(self.min, n)),
+            BetRef::Hardway(n) => (Slot::Hardway(hard_index(n)?), self.rules.prop_bet_cents),
+            BetRef::AnySeven => (Slot::AnySeven, self.rules.prop_bet_cents),
+            BetRef::AnyCraps => (Slot::AnyCraps, self.rules.prop_bet_cents),
+            _ => return None,
+        };
+        Some(FlatSpec { slot, base })
     }
 
     /// What this bet's progression stream currently calls for. Place bets
@@ -627,6 +852,124 @@ mod tests {
             "tops up to 5x the new flat, paying only the difference"
         );
         assert_eq!(t.come_odds[2], 10_000);
+    }
+
+    #[test]
+    fn a_contract_bet_cannot_come_down() {
+        let (sel, r) = (BetSelection::default(), rules(OddsPolicy::None));
+        let mut t = table(&sel, &r, 100_000);
+        t.apply(Action::Bet(BetRef::Pass, Amount::Base)).unwrap();
+        // On the come-out the bet is not yet a contract — the point has not
+        // been established, and nothing has been committed to.
+        assert_eq!(t.apply(Action::Down(BetRef::Pass)), Ok(0));
+        assert_eq!(t.pass, 0);
+
+        t.apply(Action::Bet(BetRef::Pass, Amount::Base)).unwrap();
+        t.point = Some(6);
+        assert_eq!(
+            t.apply(Action::Down(BetRef::Pass)),
+            Err(RejectReason::ContractBet)
+        );
+        assert_eq!(t.pass, 1000, "still out there, as it must be");
+    }
+
+    #[test]
+    fn place_bets_and_odds_come_down_on_request() {
+        let (sel, r) = (BetSelection::default(), rules(OddsPolicy::X345));
+        let mut t = table(&sel, &r, 100_000);
+        t.point = Some(4);
+        t.pass = 1000;
+        t.apply(Action::Bet(BetRef::Place(6), Amount::Base))
+            .unwrap();
+        t.apply(Action::Bet(BetRef::PassOdds, Amount::MaxOdds))
+            .unwrap();
+        let before = t.cash;
+
+        assert_eq!(t.apply(Action::Down(BetRef::Place(6))), Ok(0));
+        assert_eq!(t.place[2], 0);
+        assert_eq!(t.cash, before + 1200);
+
+        // Odds are never a contract bet, which is most of why they are the
+        // best bet on the table.
+        assert_eq!(t.apply(Action::Down(BetRef::PassOdds)), Ok(0));
+        assert_eq!(t.pass_odds, 0);
+        assert_eq!(t.cash, before + 1200 + 3000);
+    }
+
+    #[test]
+    fn taking_down_what_is_not_there_is_refused() {
+        let (sel, r) = (BetSelection::default(), rules(OddsPolicy::None));
+        let mut t = table(&sel, &r, 100_000);
+        t.point = Some(4);
+        assert_eq!(
+            t.apply(Action::Down(BetRef::Place(6))),
+            Err(RejectReason::NothingThere)
+        );
+        assert_eq!(refusals(&t), vec![RejectReason::NothingThere]);
+    }
+
+    #[test]
+    fn a_stake_moves_up_and_down_against_the_rail() {
+        let (sel, r) = (BetSelection::default(), rules(OddsPolicy::None));
+        let mut t = table(&sel, &r, 100_000);
+        t.point = Some(4);
+        t.apply(Action::Bet(BetRef::Place(6), Amount::Base))
+            .unwrap();
+        let start = t.cash;
+
+        // Up: the difference comes off the rail.
+        assert_eq!(
+            t.apply(Action::SetStake(BetRef::Place(6), Amount::Cents(2400))),
+            Ok(1200)
+        );
+        assert_eq!(t.place[2], 2400);
+        assert_eq!(t.cash, start - 1200);
+
+        // Down: it comes back.
+        assert_eq!(
+            t.apply(Action::SetStake(BetRef::Place(6), Amount::Cents(1200))),
+            Ok(0)
+        );
+        assert_eq!(t.place[2], 1200);
+        assert_eq!(t.cash, start);
+
+        // Never below the table's own stake for the bet: a player who wants
+        // nothing there takes it down.
+        t.apply(Action::SetStake(BetRef::Place(6), Amount::Cents(1)))
+            .unwrap();
+        assert_eq!(t.place[2], 1200);
+    }
+
+    #[test]
+    fn a_bet_turned_off_resolves_nothing() {
+        // Calling a bet off is something only a compiled strategy can do, so
+        // this needs the session type that compiles the working flags in —
+        // the built-in player's type folds them away to a constant `true`.
+        let (sel, r) = (BetSelection::default(), rules(OddsPolicy::None));
+        let mut t: Session<'_, Spy, crate::strategy::AllFeatures> =
+            Session::with_observer(&sel, &r, 1000, 100_000, false, Spy::default());
+        t.point = Some(4);
+        t.apply(Action::Bet(BetRef::Place(6), Amount::Base))
+            .unwrap();
+        t.apply(Action::Working(BetRef::Place(6), false)).unwrap();
+        let cash = t.cash;
+
+        t.resolve(3, 3); // the 6 hits, but the bet is off
+        assert_eq!(t.cash, cash, "an off bet does not get paid");
+        assert_eq!(t.place[2], 1200, "and it is still there");
+
+        t.resolve(3, 4); // seven out
+        assert_eq!(t.place[2], 1200, "and it does not lose either");
+        assert_eq!(t.cash, cash);
+    }
+
+    #[test]
+    fn leaving_is_recorded_for_the_session_loop() {
+        let (sel, r) = (BetSelection::default(), rules(OddsPolicy::None));
+        let mut t = table(&sel, &r, 100_000);
+        assert!(!t.leaving);
+        assert_eq!(t.apply(Action::Leave), Ok(0));
+        assert!(t.leaving);
     }
 
     #[test]

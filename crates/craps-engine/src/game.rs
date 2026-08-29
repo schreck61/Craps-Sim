@@ -13,7 +13,7 @@ use crate::strategy::view::{
     Features, History, NoFeatures, Stakes, STREAMS, S_ANY7, S_ANYCRAPS, S_COME, S_DC, S_DONT,
     S_FIELD, S_HARD, S_PASS, S_PLACE,
 };
-use crate::strategy::{Action, Amount, BetRef, FeatureMask, TableView};
+use crate::strategy::{Amount, BetRef, FeatureMask, TableView};
 use crate::trace::{BetEvent, BetEventKind, BetKind, Noop, RollObserver};
 
 pub(crate) struct Session<'a, O: RollObserver = Noop, F: Features = NoFeatures> {
@@ -76,6 +76,19 @@ pub(crate) struct Session<'a, O: RollObserver = Noop, F: Features = NoFeatures> 
     pub(crate) p_hard: [ProgState; 4],
     pub(crate) p_any7: ProgState,
     pub(crate) p_anycraps: ProgState,
+    /// Whether each place bet and hardway is working. An off bet sits on
+    /// the layout resolving nothing — still the player's money, still in
+    /// what they would walk away with. Place bets and hardways are the only
+    /// bets a table lets a player call off; the rest are contract bets, ride
+    /// with what they back, or resolve before the question can be asked.
+    ///
+    /// The come-out convention is separate and unchanged: these bets are off
+    /// on a come-out roll whatever this says.
+    pub(crate) place_working: [bool; 6],
+    pub(crate) hard_working: [bool; 4],
+    /// Set when a strategy leaves the table on its own terms. The session
+    /// loop reads it after the decision and ends there.
+    pub(crate) leaving: bool,
     /// The pressing system on each bet stream, keyed like [`STREAMS`].
     ///
     /// One per stream rather than one for the table: a player who
@@ -174,6 +187,9 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
             p_hard: [ProgState::new(rules.prop_bet_cents); 4],
             p_any7: ProgState::new(rules.prop_bet_cents),
             p_anycraps: ProgState::new(rules.prop_bet_cents),
+            place_working: [true; 6],
+            hard_working: [true; 4],
+            leaving: false,
             progressions: [sel.progression; STREAMS],
             start_cash: cash,
             features: F::MASK,
@@ -349,11 +365,11 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                 // Come-out: line bets only. Place bets and hardways are "off".
                 if self.sel.pass_line && self.pass == 0 {
                     let want = self.prog_stake(self.p_pass.stake, self.min, BetRef::Pass);
-                    let _ = self.apply(Action::Bet(BetRef::Pass, Amount::Cents(want)));
+                    let _ = self.apply_bet(BetRef::Pass, Amount::Cents(want));
                 }
                 if self.sel.dont_pass && self.dont == 0 {
                     let want = self.prog_stake(self.p_dont.stake, self.min, BetRef::DontPass);
-                    let _ = self.apply(Action::Bet(BetRef::DontPass, Amount::Cents(want)));
+                    let _ = self.apply_bet(BetRef::DontPass, Amount::Cents(want));
                 }
             }
             Some(point) => {
@@ -363,29 +379,29 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                     && self.live_come_bets() < self.sel.come_max
                 {
                     let want = self.prog_stake(self.p_come.stake, self.min, BetRef::Come);
-                    let _ = self.apply(Action::Bet(BetRef::Come, Amount::Cents(want)));
+                    let _ = self.apply_bet(BetRef::Come, Amount::Cents(want));
                 }
                 if self.sel.dont_come_max > 0
                     && self.dc_flat == 0
                     && self.live_dc_bets() < self.sel.dont_come_max
                 {
                     let want = self.prog_stake(self.p_dc.stake, self.min, BetRef::DontCome);
-                    let _ = self.apply(Action::Bet(BetRef::DontCome, Amount::Cents(want)));
+                    let _ = self.apply_bet(BetRef::DontCome, Amount::Cents(want));
                 }
                 // Odds behind an established line bet.
                 if takes_odds {
                     if self.pass > 0 && self.pass_odds == 0 {
-                        let _ = self.apply(Action::Bet(BetRef::PassOdds, Amount::MaxOdds));
+                        let _ = self.apply_bet(BetRef::PassOdds, Amount::MaxOdds);
                     }
                     if self.dont > 0 && self.dont_lay == 0 {
-                        let _ = self.apply(Action::Bet(BetRef::DontPassLay, Amount::MaxOdds));
+                        let _ = self.apply_bet(BetRef::DontPassLay, Amount::MaxOdds);
                     }
                 }
                 // Place bets on selected numbers other than the current point.
                 for (i, &num) in PLACE_NUMS.iter().enumerate() {
                     if self.sel.place[i] && num != point && self.place[i] == 0 {
                         let want = self.prog_place_stake(i);
-                        let _ = self.apply(Action::Bet(BetRef::Place(num), Amount::Cents(want)));
+                        let _ = self.apply_bet(BetRef::Place(num), Amount::Cents(want));
                     }
                 }
                 // Hardways.
@@ -394,7 +410,7 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                         let base = self.rules.prop_bet_cents;
                         let want =
                             self.prog_stake(self.p_hard[i].stake, base, BetRef::Hardway(num));
-                        let _ = self.apply(Action::Bet(BetRef::Hardway(num), Amount::Cents(want)));
+                        let _ = self.apply_bet(BetRef::Hardway(num), Amount::Cents(want));
                     }
                 }
             }
@@ -404,27 +420,27 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
         if takes_odds {
             for (i, &num) in PLACE_NUMS.iter().enumerate() {
                 if self.come_points[i] > 0 {
-                    let _ = self.apply(Action::Bet(BetRef::ComeOdds(num), Amount::MaxOdds));
+                    let _ = self.apply_bet(BetRef::ComeOdds(num), Amount::MaxOdds);
                 }
                 if self.dc_points[i] > 0 {
-                    let _ = self.apply(Action::Bet(BetRef::DontComeLay(num), Amount::MaxOdds));
+                    let _ = self.apply_bet(BetRef::DontComeLay(num), Amount::MaxOdds);
                 }
             }
         }
         // One-roll bets, working on every roll.
         if self.sel.field && self.field_bet == 0 {
             let want = self.prog_stake(self.p_field.stake, self.min, BetRef::Field);
-            let _ = self.apply(Action::Bet(BetRef::Field, Amount::Cents(want)));
+            let _ = self.apply_bet(BetRef::Field, Amount::Cents(want));
         }
         if self.sel.any_seven && self.any7_bet == 0 {
             let base = self.rules.prop_bet_cents;
             let want = self.prog_stake(self.p_any7.stake, base, BetRef::AnySeven);
-            let _ = self.apply(Action::Bet(BetRef::AnySeven, Amount::Cents(want)));
+            let _ = self.apply_bet(BetRef::AnySeven, Amount::Cents(want));
         }
         if self.sel.any_craps && self.anycraps_bet == 0 {
             let base = self.rules.prop_bet_cents;
             let want = self.prog_stake(self.p_anycraps.stake, base, BetRef::AnyCraps);
-            let _ = self.apply(Action::Bet(BetRef::AnyCraps, Amount::Cents(want)));
+            let _ = self.apply_bet(BetRef::AnyCraps, Amount::Cents(want));
         }
         // Placement is a pure function of cash, bets, and the point; until a
         // resolution changes one of those, running it again is a no-op.
@@ -800,7 +816,7 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                         );
                     }
                     for (i, &num) in PLACE_NUMS.iter().enumerate() {
-                        if self.place[i] > 0 {
+                        if self.place[i] > 0 && self.place_is_working(i) {
                             // working place bets lose
                             let stake = self.place[i];
                             self.resolved_wagered_cents += stake;
@@ -811,7 +827,7 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                         }
                     }
                     for (i, &num) in HARD_NUMS.iter().enumerate() {
-                        if self.hard[i] > 0 {
+                        if self.hard[i] > 0 && self.hard_is_working(i) {
                             let stake = self.hard[i];
                             self.resolved_wagered_cents += stake;
                             progs[S_HARD + i].on_loss(
@@ -842,7 +858,7 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                 // bet stays up, and the progression presses or regresses it
                 // in place out of (or back into) the player's rail.
                 if let Some(i) = place_index(t) {
-                    if self.place[i] > 0 {
+                    if self.place[i] > 0 && self.place_is_working(i) {
                         self.needs_placement = true;
                         // The winning stake resolves once; the press that
                         // follows is a fresh placement, not a resolution.
@@ -872,7 +888,7 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                 }
                 // Hardways: winners stay up, pressed the same way.
                 if let Some(i) = hard_index(t) {
-                    if self.hard[i] > 0 {
+                    if self.hard[i] > 0 && self.hard_is_working(i) {
                         self.needs_placement = true;
                         // Resolves on both the hard way (win) and easy way
                         // (loss); the press after a win is a new placement.
@@ -967,6 +983,21 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
         if F::MASK.has(FeatureMask::PEAK) && self.features.has(FeatureMask::PEAK) {
             self.record_peak();
         }
+    }
+
+    /// Whether a place bet is working. The built-in player has no way to
+    /// call a bet off — nothing in `BetSelection` can say it — so for that
+    /// player `F::MASK` is empty, this is a constant `true`, and the flag
+    /// is never loaded. Leaving it as a runtime read cost the loaded table
+    /// a third of its throughput, which is what the paired benchmark is for.
+    #[inline]
+    fn place_is_working(&self, i: usize) -> bool {
+        F::MASK.is_empty() || self.place_working[i]
+    }
+
+    #[inline]
+    fn hard_is_working(&self, i: usize) -> bool {
+        F::MASK.is_empty() || self.hard_working[i]
     }
 
     /// Per-roll derived history. Split out of [`Session::resolve`] and

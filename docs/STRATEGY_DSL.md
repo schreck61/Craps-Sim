@@ -535,21 +535,26 @@ hand-written player on identical dice (`bench_compiled`):
 
 | configuration | rules | built-in | compiled | ratio |
 |---|---|---|---|---|
-| pass line | 1 | 21.8 ns | 27.1 ns | 1.24× |
-| 3-point molly | 9 | 34.6 ns | 68.1 ns | 1.97× |
-| loaded table | 29 | 53.8 ns | 182.0 ns | 3.39× |
-| loaded + full press | 29 | 60.2 ns | 183.4 ns | 3.05× |
+| pass line | 1 | 22.5 ns | 29.4 ns | 1.31× |
+| 3-point molly | 9 | 35.8 ns | 77.2 ns | 2.16× |
+| loaded table | 29 | 55.9 ns | 214.9 ns | 3.85× |
+| loaded + full press | 29 | 62.1 ns | 225.8 ns | 3.64× |
 
-Cost scales with rule count at roughly 4.5 ns per rule per roll, which is
-what a dispatching interpreter costs and is not going to become free. The
-1.15× figure this section previously carried was written before anything was
+Cost scales with rule count at roughly 5 ns per rule per roll, which is what
+a dispatching interpreter costs and is not going to become free. The 1.15×
+figure this section previously carried was written before anything was
 measured; it was wrong, and it was wrong in a way that mattered, because it
 implied a plan the numbers do not support.
 
-**Budget, revised:** ≤ 2× for a strategy of up to ten rules, and ≤ 4× for one
-that covers the felt. The gate asserts the worst case across the four
+P2c raised the loaded figures from 182 to 215 ns — an 18% tax on interpreted
+strategies, paid for the actions that make the language worth having. The
+built-in player pays none of it.
+
+**Budget, revised:** ≤ 2× for a strategy of up to ten rules, and ≤ 4.5× for
+one that covers the felt. The gate asserts the worst case across the four
 benchmark configurations as a regression tripwire, not as a target to
-optimize toward.
+optimize toward — and it is set with headroom on purpose, because a tripwire
+four percent above the current reading is a tripwire that fires on noise.
 
 This is fast enough. A loaded custom strategy at 182 ns/roll is ~5.5M
 rolls/s/core — a 1.2M-session run still finishes in seconds on any machine
@@ -602,10 +607,17 @@ performance gate green.
 - **P2b — done.** Per-stream progressions (S5), `Amount::Pressed`, and the
   equivalence proof extended across the full progression axis. The design
   revision in §6 was found here.
-- **P2c — next.** `Press`, `Regress`, `Down`, `Working`, and `Leave` on the
-  intent surface — the decision-point actions, now clearly distinct from
-  pressing. These are what §7's worked examples need and what the language
-  cannot yet say.
+- **P2c — done.** `Press`, `Regress`, `Down`, `Working`, and `Leave` on the
+  intent surface, with §7's worked examples built and simulated as tests.
+  Contract bets refuse to come down; odds always come down; a bet called off
+  neither wins nor loses. One gap left deliberately: `Working` says off or
+  on, and cannot yet say *working on the come-out* — that needs the come-out
+  branch of `resolve` to grow place-bet resolution it has never had, and it
+  is its own change with its own risk to the pinned outcomes.
+
+**Interaction, decided:** a progression sets the stake where the bet
+resolves; a rule may then override it at the decision point. Last write
+wins, the same ordering that governs two rules touching one bet.
 
 **P3 — Text form (5.0 dd).** `parse`/`render`, the `language 1` header, the
 round-trip property test over randomized rule sets, error messages that name the

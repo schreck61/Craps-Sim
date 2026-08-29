@@ -144,6 +144,18 @@ pub enum AmountExpr {
 pub enum Stmt {
     /// Put the bet up if it is not up; top odds up to the target.
     Bet(BetRef, AmountExpr),
+    /// Raise a working bet to this stake. A press that would lower the bet
+    /// does nothing, because `press` should mean what it says; use
+    /// [`Stmt::Regress`] to come down.
+    Press(BetRef, AmountExpr),
+    /// Lower a working bet to this stake, taking the difference back.
+    Regress(BetRef, AmountExpr),
+    /// Take the bet down entirely.
+    Down(BetRef),
+    /// Turn a place bet or hardway off, or back on.
+    Working(BetRef, bool),
+    /// Leave the table.
+    Leave,
     /// Write a value into strategy memory.
     Set(VarId, Expr),
 }

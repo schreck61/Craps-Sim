@@ -110,6 +110,22 @@ pub fn compile(s: &Strategy) -> Result<Program, CompileError> {
                     ops.push(Op::Bet(*bet, AmountKind::of(amount)));
                     bets += 1;
                 }
+                Stmt::Press(bet, amount) | Stmt::Regress(bet, amount) => {
+                    if let Some(e) = amount_expr(amount) {
+                        check_depth(e)?;
+                        emit_expr(e, &mut ops, &mut features, s)?;
+                    }
+                    let kind = AmountKind::of(amount);
+                    ops.push(if matches!(stmt, Stmt::Press(..)) {
+                        Op::Press(*bet, kind)
+                    } else {
+                        Op::Regress(*bet, kind)
+                    });
+                    bets += 1;
+                }
+                Stmt::Down(bet) => ops.push(Op::Down(*bet)),
+                Stmt::Working(bet, on) => ops.push(Op::Working(*bet, *on)),
+                Stmt::Leave => ops.push(Op::Leave),
                 Stmt::Set(slot, e) => {
                     if *slot as usize >= s.vars.len() {
                         return Err(CompileError::UnknownVar(*slot));
@@ -139,6 +155,8 @@ pub fn compile(s: &Strategy) -> Result<Program, CompileError> {
         }
     }
 
+    // A strategy that only takes bets down and leaves never puts anything
+    // at risk, which is not a strategy anyone can learn anything from.
     if bets == 0 {
         return Err(CompileError::NeverBets);
     }
