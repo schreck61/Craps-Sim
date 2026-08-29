@@ -29,6 +29,18 @@ use crate::trace::BetKind;
 /// three in a row" means the line, not the line and its odds counted twice.
 pub(crate) const STREAMS: usize = 17;
 
+pub(crate) const S_PASS: usize = 0;
+pub(crate) const S_DONT: usize = 1;
+pub(crate) const S_COME: usize = 2;
+pub(crate) const S_DC: usize = 3;
+pub(crate) const S_FIELD: usize = 4;
+/// First of the six place streams, in [`PLACE_NUMS`](crate::PLACE_NUMS) order.
+pub(crate) const S_PLACE: usize = 5;
+/// First of the four hardway streams, in [`HARD_NUMS`](crate::HARD_NUMS) order.
+pub(crate) const S_HARD: usize = 11;
+pub(crate) const S_ANY7: usize = 15;
+pub(crate) const S_ANYCRAPS: usize = 16;
+
 /// The stream a bet event belongs to, or `None` for odds (which resolve
 /// with the flat they back) and for events that are not wins or losses.
 #[inline]

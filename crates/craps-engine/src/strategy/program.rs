@@ -65,6 +65,7 @@ pub enum Op {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AmountKind {
     Base,
+    Pressed,
     Units,
     Cents,
     MaxOdds,
@@ -80,6 +81,7 @@ impl AmountKind {
     pub(crate) fn of(e: &AmountExpr) -> Self {
         match e {
             AmountExpr::Base => AmountKind::Base,
+            AmountExpr::Pressed => AmountKind::Pressed,
             AmountExpr::Units(_) => AmountKind::Units,
             AmountExpr::Cents(_) => AmountKind::Cents,
             AmountExpr::MaxOdds => AmountKind::MaxOdds,
@@ -174,6 +176,8 @@ pub struct Program {
     /// Whether the program bets on one-roll propositions, which resolve
     /// every roll and so always need asking again.
     pub(crate) bets_one_roll: bool,
+    /// The pressing system on each bet stream.
+    pub(crate) progressions: [crate::bets::Progression; STREAMS],
     /// FNV-1a over the compiled form — the identity a Scenario Sentence
     /// carries so a strategy can never be silently swapped for another of
     /// the same name.
@@ -390,6 +394,7 @@ fn evaluate(
                     bet,
                     match kind {
                         AmountKind::Base => Amount::Base,
+                        AmountKind::Pressed => Amount::Pressed,
                         AmountKind::Units => Amount::Units(value),
                         AmountKind::Cents => Amount::Cents(value),
                         AmountKind::MaxOdds => Amount::MaxOdds,

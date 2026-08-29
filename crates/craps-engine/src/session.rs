@@ -161,6 +161,7 @@ pub(crate) fn run_with_player<O: RollObserver, P: Player>(
     let mut rng = Xoshiro256pp::seed_from_u64(seed);
     let mut s: Session<'_, O, P::Feat> =
         Session::with_observer(sel, rules, table_min_cents, budget_cents, false, obs);
+    s.progressions = player.progressions(sel);
     let cheapest = player.cheapest_stake(&s);
     let mut rolls = 0u64;
     let mut ruin: Option<RuinOutcome> = None;

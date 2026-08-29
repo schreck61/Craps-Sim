@@ -15,6 +15,8 @@
 //! declared up front: a strategy is total and cost-bounded before it runs,
 //! which is what makes it safe to execute unreviewed across every core.
 
+use crate::bets::Progression;
+use crate::strategy::view::STREAMS;
 use crate::strategy::BetRef;
 
 /// A slot in a strategy's memory, resolved at compile time. There is no
@@ -126,6 +128,9 @@ pub enum AmountExpr {
     /// to the bet's payout unit, or the configured prop stake. What every
     /// flat player bets without saying so.
     Base,
+    /// Whatever this stream's pressing system calls for. The same as
+    /// [`AmountExpr::Base`] under a flat progression.
+    Pressed,
     /// This many table minimums.
     Units(Expr),
     /// Exactly this many cents.
@@ -178,6 +183,15 @@ pub struct Strategy {
     /// Declared memory slots, by name. Index is the [`VarId`].
     pub vars: Vec<String>,
     pub rules: Vec<Rule>,
+    /// The pressing system on each bet stream, keyed like the session's
+    /// streams. This is a declaration rather than a rule, and the reason is
+    /// in the game: when a place bet hits, the dealer pays and asks whether
+    /// to press it *then*, before the next roll. A progression is a standing
+    /// answer to that question, applied where the bet resolves. Rules act at
+    /// the decision point between rolls, which is the right place for
+    /// "take everything down after two hits" and the wrong place for "press
+    /// this winner out of its own winnings".
+    pub progressions: [Progression; STREAMS],
 }
 
 impl Strategy {
@@ -186,7 +200,23 @@ impl Strategy {
             name: name.into(),
             vars: Vec::new(),
             rules,
+            progressions: [Progression::Flat; STREAMS],
         }
+    }
+
+    /// Press every stream the same way — what a checkbox player means by
+    /// choosing one progression.
+    pub fn pressing(mut self, p: Progression) -> Self {
+        self.progressions = [p; STREAMS];
+        self
+    }
+
+    /// Press one stream differently from the rest.
+    pub fn pressing_stream(mut self, stream: usize, p: Progression) -> Self {
+        if stream < STREAMS {
+            self.progressions[stream] = p;
+        }
+        self
     }
 }
 

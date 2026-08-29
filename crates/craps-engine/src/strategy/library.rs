@@ -33,7 +33,7 @@ fn and(a: Expr, b: Expr) -> Expr {
 }
 
 fn bet(b: BetRef) -> Stmt {
-    Stmt::Bet(b, AmountExpr::Base)
+    Stmt::Bet(b, AmountExpr::Pressed)
 }
 
 fn odds(b: BetRef) -> Stmt {
@@ -135,13 +135,13 @@ pub fn from_selection(sel: &BetSelection, rules: &Rules) -> Strategy {
         out.push(Rule::new(Trigger::Roll, vec![bet(BetRef::AnyCraps)]));
     }
 
-    Strategy::new("checkbox player", out)
+    Strategy::new("checkbox player", out).pressing(sel.progression)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bets::OddsPolicy;
+    use crate::bets::{OddsPolicy, Progression};
     use crate::session::{run_program_session, run_session};
     use crate::strategy::compile;
     use crate::sweep::explore_strategies;
@@ -225,6 +225,82 @@ mod tests {
             }
             println!("{name}: 10,000 seeds identical");
         }
+    }
+
+    /// The progression axis, which is where pressing actually lives.
+    ///
+    /// Eleven strategies crossed with all twelve progressions, every one
+    /// simulated both ways on the same dice. This is the test that had to
+    /// pass before progressions could be called ported.
+    #[test]
+    fn compiled_matches_builtin_across_every_progression() {
+        let r = rules(OddsPolicy::X345);
+        for prog in Progression::ALL {
+            for (name, base) in explore_strategies() {
+                let sel = BetSelection {
+                    progression: prog,
+                    ..base
+                };
+                let program = compile(&from_selection(&sel, &r)).unwrap();
+                for seed in 0..150u64 {
+                    let want = run_session(&sel, &r, 1000, 30_000, None, 200_000, 400, seed);
+                    let got =
+                        run_program_session(&program, &r, 1000, 30_000, None, 200_000, 400, seed);
+                    assert_eq!(
+                        (
+                            want.ruin.rolls,
+                            want.horizon.final_cents,
+                            want.peak_outlay_cents,
+                            want.horizon_handle_cents
+                        ),
+                        (
+                            got.ruin.rolls,
+                            got.horizon.final_cents,
+                            got.peak_outlay_cents,
+                            got.horizon_handle_cents
+                        ),
+                        "{name} + {prog:?} seed {seed}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// What the single global progression could never say: press one stream
+    /// and not another. The don't pass Martingales; the place bets stay
+    /// flat; neither matches a table where everything does one or the other.
+    #[test]
+    fn streams_press_independently() {
+        let r = rules(OddsPolicy::None);
+        let mut sel = BetSelection {
+            dont_pass: true,
+            pass_line: false,
+            ..Default::default()
+        };
+        sel.set_place(6, true);
+        sel.set_place(8, true);
+
+        let mixed = from_selection(&sel, &r)
+            .pressing(Progression::Flat)
+            .pressing_stream(crate::strategy::view::S_DONT, Progression::Martingale);
+        let mixed = compile(&mixed).unwrap();
+
+        let all_flat = compile(&from_selection(&sel, &r).pressing(Progression::Flat)).unwrap();
+        let all_mart =
+            compile(&from_selection(&sel, &r).pressing(Progression::Martingale)).unwrap();
+
+        let run = |p: &crate::strategy::Program| {
+            (0..300u64)
+                .map(|seed| {
+                    run_program_session(p, &r, 1000, 30_000, None, 200_000, 400, seed)
+                        .horizon
+                        .final_cents
+                })
+                .sum::<i64>()
+        };
+        let (m, f, a) = (run(&mixed), run(&all_flat), run(&all_mart));
+        assert_ne!(m, f, "mixed pressing matched all-flat");
+        assert_ne!(m, a, "mixed pressing matched all-Martingale");
     }
 
     /// A compiled checkbox player reads no derived history: the mask it

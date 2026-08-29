@@ -260,26 +260,51 @@ obeys. The `language 1` header is binding: the parser refuses a version it does
 not know rather than guessing, so a saved strategy never silently changes
 meaning under a grammar revision.
 
-## 6. Progressions Become Rules
+## 6. Progressions Are Declared Per Stream
 
-Martingale is not a feature. It is:
+*Revised at P2b, against this section's original claim.* What follows is what
+was written first, and then what building it taught.
 
-```
-  on loss of pass: press pass to 2x
-  on win of pass:  regress pass to 1u
-```
+**The original claim** was that Martingale is not a feature but a pair of
+rules — `on loss of pass: press pass to 2x` — and that the twelve progressions
+would therefore dissolve into rule fragments.
 
-The twelve progressions therefore stop being a separate axis of the engine and
-become a **built-in library of rule fragments, attachable per bet stream**. Two
-things follow:
+**What building it showed** is that this models the game wrong. When a place
+bet hits, the dealer pays you and asks *right then* whether to press it, before
+the next roll leaves the shooter's hand. The engine has always done exactly
+that: pressing happens inside resolution, out of the winnings. A rule fires at
+the decision point, which is *after* every bet on that roll has resolved — so
+compiling a progression to rules moves the press to a different moment, changes
+which bet gets the last dollar when the bankroll is short, and silently stops
+reproducing the engine it was supposed to replace.
+
+The decision point is the right place for *"take everything down after two
+hits"*. It is the wrong place for *"press this winner out of its own
+winnings"*, and the difference is not a technicality — it is where the money
+moves.
+
+**So progressions stay declarative, and become per stream.** A strategy
+declares `progressions: [Progression; 17]`, one per betting stream, applied
+where the bet resolves. Rules keep the decision point. A bet asks for
+[`Amount::Pressed`] — whatever its stream's system currently calls for — which
+under a flat progression is exactly the base stake, which is why a flat player
+never has to say which it meant. Two things follow, both of which the original
+claim also wanted:
 
 1. The Explorer's progression axis (GUI spec §6.6) is preserved exactly — the
-   twelve fragments are named, enumerable, and crossable as they are today.
+   twelve are named, enumerable, and crossable as they are today.
 2. Per-stream progressions become expressible for the first time: *Martingale
    the don't pass, flat place bets.* Today `Progression` is one global enum and
    this cannot be said. This also retires the "per-bet Anchor variants beyond
    progressions" item in [v-next.md](v-next.md) by giving it a real
    representation.
+
+The gate that proves it: all eleven curated strategies crossed with all twelve
+progressions, simulated both ways on the same dice, agreeing on the roll they
+died, what they walked out with, their peak outlay, and their handle
+(`compiled_matches_builtin_across_every_progression`). Mixed pressing is proven
+distinct from both all-flat and all-Martingale, because a test that could not
+tell them apart would not be testing anything.
 
 The existing [`Progression`](../crates/craps-engine/src/bets.rs) enum and its
 `description()` strings survive as the library's labels; the GUI picker and its
@@ -574,9 +599,13 @@ performance gate green.
 - **P2a — done.** AST, compiler with fused guards and static checks, stack
   machine, `Player` seam on the session loop, `from_selection`, and the
   10,000-seed equivalence proof across all eleven curated strategies.
-- **P2b — next.** `Press`, `Regress`, `Down`, `Working`, and `Leave` on the
-  intent surface, then the twelve progressions as rule fragments (S5), then
-  the equivalence proof extended across the progression axis.
+- **P2b — done.** Per-stream progressions (S5), `Amount::Pressed`, and the
+  equivalence proof extended across the full progression axis. The design
+  revision in §6 was found here.
+- **P2c — next.** `Press`, `Regress`, `Down`, `Working`, and `Leave` on the
+  intent surface — the decision-point actions, now clearly distinct from
+  pressing. These are what §7's worked examples need and what the language
+  cannot yet say.
 
 **P3 — Text form (5.0 dd).** `parse`/`render`, the `language 1` header, the
 round-trip property test over randomized rule sets, error messages that name the

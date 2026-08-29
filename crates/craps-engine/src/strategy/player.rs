@@ -13,10 +13,10 @@
 //! The trait is used statically, never behind a pointer, so both players
 //! monomorphize to exactly the loop they need.
 
-use crate::bets::cheapest_selected_stake;
+use crate::bets::{cheapest_selected_stake, BetSelection, Progression};
 use crate::game::Session;
 use crate::strategy::program::{decision_from, fired, Program};
-use crate::strategy::view::{AllFeatures, Features, NoFeatures};
+use crate::strategy::view::{AllFeatures, Features, NoFeatures, STREAMS};
 use crate::trace::RollObserver;
 
 pub(crate) trait Player {
@@ -32,6 +32,13 @@ pub(crate) trait Player {
     /// The cheapest stake this player might put up — the amount below which
     /// a bankroll with nothing working is ruined.
     fn cheapest_stake<O: RollObserver>(&self, s: &Session<'_, O, Self::Feat>) -> i64;
+
+    /// How each bet stream presses. The checkbox player answers with its one
+    /// choice seventeen times; a compiled strategy may answer differently
+    /// per stream.
+    fn progressions(&self, sel: &BetSelection) -> [Progression; STREAMS] {
+        [sel.progression; STREAMS]
+    }
 }
 
 /// The checkbox player: a [`BetSelection`](crate::BetSelection) and one
@@ -110,5 +117,9 @@ impl Player for Compiled<'_> {
     #[inline]
     fn cheapest_stake<O: RollObserver>(&self, _s: &Session<'_, O, AllFeatures>) -> i64 {
         self.cheapest
+    }
+
+    fn progressions(&self, _sel: &BetSelection) -> [Progression; STREAMS] {
+        self.program.progressions
     }
 }

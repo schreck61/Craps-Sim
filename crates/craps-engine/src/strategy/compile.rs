@@ -164,7 +164,7 @@ pub fn compile(s: &Strategy) -> Result<Program, CompileError> {
         )
     });
 
-    let hash = hash_program(&s.name, &ops, features);
+    let hash = hash_program(&s.name, &ops, features, &s.progressions);
     Ok(Program {
         name: s.name.clone(),
         ops,
@@ -172,6 +172,7 @@ pub fn compile(s: &Strategy) -> Result<Program, CompileError> {
         features,
         placement_only,
         bets_one_roll,
+        progressions: s.progressions,
         hash,
     })
 }
@@ -279,7 +280,7 @@ fn stream_bit(b: BetRef) -> Result<u8, CompileError> {
 fn amount_expr(a: &AmountExpr) -> Option<&Expr> {
     match a {
         AmountExpr::Units(e) | AmountExpr::Cents(e) => Some(e),
-        AmountExpr::Base | AmountExpr::MaxOdds => None,
+        AmountExpr::Base | AmountExpr::Pressed | AmountExpr::MaxOdds => None,
     }
 }
 
@@ -352,7 +353,12 @@ fn check_depth(e: &Expr) -> Result<(), CompileError> {
 /// FNV-1a over the compiled form, hand-rolled so it is stable across
 /// platforms and releases — the same reason
 /// [`SimConfig::fingerprint`](../../../craps-app/src/config.rs) is.
-fn hash_program(name: &str, ops: &[Op], features: FeatureMask) -> u64 {
+fn hash_program(
+    name: &str,
+    ops: &[Op],
+    features: FeatureMask,
+    progressions: &[crate::bets::Progression],
+) -> u64 {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
     let mut h = OFFSET;
@@ -372,6 +378,11 @@ fn hash_program(name: &str, ops: &[Op], features: FeatureMask) -> u64 {
     }
     for b in format!("{features:?}").as_bytes() {
         byte(*b, &mut h);
+    }
+    for p in progressions {
+        for b in format!("{p:?}").as_bytes() {
+            byte(*b, &mut h);
+        }
     }
     h
 }

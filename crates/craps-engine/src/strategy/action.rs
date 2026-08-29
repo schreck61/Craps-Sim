@@ -50,6 +50,11 @@ pub enum Amount {
     /// up to the bet's payout unit, or the configured prop stake. What a
     /// flat player bets without having to name a number.
     Base,
+    /// Whatever this stream's pressing system calls for right now, clipped
+    /// to the table maximum and rounded the way the table would take it.
+    /// Identical to [`Amount::Base`] under a flat progression, which is why
+    /// a flat player never has to say which it meant.
+    Pressed,
     /// Exactly this many cents, rounded up to the bet's payout unit.
     Cents(i64),
     /// This many table minimums, rounded up to the bet's payout unit.
@@ -153,7 +158,10 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
         if *self.slot(spec.slot) != 0 {
             return Ok(0); // already up; `Bet` is idempotent
         }
-        let want = self.resolve_amount(bet, amount, spec.base)?;
+        let want = match amount {
+            Amount::Pressed => self.pressed_stake(bet, spec.base),
+            other => self.resolve_amount(bet, other, spec.base)?,
+        };
         match self.try_stake_or_base(want, spec.base) {
             Some(a) => {
                 *self.slot_mut(spec.slot) = a;
@@ -335,6 +343,28 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
         }
     }
 
+    /// What this bet's progression stream currently calls for. Place bets
+    /// round to their payout unit; everything else rounds to whole dollars,
+    /// because a real table does not take a $33.75 flat.
+    fn pressed_stake(&mut self, bet: BetRef, base: i64) -> i64 {
+        if let BetRef::Place(n) = bet {
+            let i = place_index(n).expect("place number");
+            return self.prog_place_stake(i);
+        }
+        let want = match bet {
+            BetRef::Pass => self.p_pass.stake,
+            BetRef::DontPass => self.p_dont.stake,
+            BetRef::Come => self.p_come.stake,
+            BetRef::DontCome => self.p_dc.stake,
+            BetRef::Field => self.p_field.stake,
+            BetRef::Hardway(n) => self.p_hard[hard_index(n).expect("hardway number")].stake,
+            BetRef::AnySeven => self.p_any7.stake,
+            BetRef::AnyCraps => self.p_anycraps.stake,
+            _ => base,
+        };
+        self.prog_stake(want, base, bet)
+    }
+
     /// Cents for an [`Amount`], rounded up to the bet's payout unit so every
     /// payout stays whole (Principle: money is integer cents end to end).
     /// Cents for an [`Amount`], rounded up to the bet's payout unit so every
@@ -344,6 +374,8 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
     fn resolve_amount(&self, bet: BetRef, amount: Amount, base: i64) -> Adjudication {
         let raw = match amount {
             Amount::Base => return Ok(base),
+            // Handled before this point, where `&mut self` is available.
+            Amount::Pressed => return Ok(base),
             Amount::Cents(c) => c,
             Amount::Units(n) => n.saturating_mul(self.min),
             // Only reachable when a strategy asks for max odds on a bet that
