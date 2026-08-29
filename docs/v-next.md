@@ -6,9 +6,17 @@ consciously, with a reason, against the non-goals contract of Part I §12.
 An item leaves this list by earning a milestone of its own — never by
 slipping quietly into a release.
 
+Two items below now have a designed shape in
+[STRATEGY_DSL.md](STRATEGY_DSL.md) (The Player, targeting v0.5). A shape is
+not a ship: they leave this list when that document's milestones land.
+
 - **Saved-scenario library.** The Scenario Sentence is the save format; a
   library done honestly enforces shared seeds so saved scenarios stay
-  comparable, and that enforcement is design work, not scope creep.
+  comparable, and that enforcement is design work, not scope creep. Shape
+  decided in [STRATEGY_DSL.md](STRATEGY_DSL.md) §10 — a directory of
+  content-hashed strategies referenced by name from the sentence, with
+  hash mismatch rendering STALE. The shared-seed enforcement this item
+  demands is unchanged and still required.
 - **Cross-run comparison.** Permanently out per spec §12 — comparing runs
   on different dice invites exactly the false inference the Duel's common
   random numbers exist to prevent. This item never graduates.
@@ -24,6 +32,10 @@ slipping quietly into a release.
 - **Per-bet Anchor variants beyond progressions.** The Anchor swaps
   progressions on identical dice with the handle held comparable; swapping
   bet sets changes the handle itself and needs its own caption discipline.
+  Retired as stated: [STRATEGY_DSL.md](STRATEGY_DSL.md) §6 makes a
+  progression a rule fragment attachable per bet stream, so per-stream
+  variants get a real representation and the Anchor gains them for free.
+  The caption discipline for swapping bet sets is unaffected and still owed.
 - **Additional Explorer objectives.** Every objective ships with its 95%
   CI computed in-sweep, so each new one is engine surface plus a whisker
   kind — a column is the cheap part.
