@@ -14,5 +14,7 @@
 //! Design and roadmap: [`STRATEGY_DSL.md`](../../../docs/STRATEGY_DSL.md).
 
 pub mod action;
+pub mod view;
 
 pub use action::{Action, Adjudication, Amount, BetRef, RejectReason};
+pub use view::{AllFeatures, FeatureMask, NoFeatures, TableView};

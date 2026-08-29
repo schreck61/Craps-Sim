@@ -6,6 +6,7 @@
 use crate::bets::{BetSelection, Rules};
 use crate::game::Session;
 use crate::rng::Xoshiro256pp;
+use crate::strategy::NoFeatures;
 use crate::trace::{Noop, RollObserver};
 
 /// Which simulation phase a session belongs to. Part of the seed so the two
@@ -124,7 +125,11 @@ pub(crate) fn run_session_impl<O: RollObserver>(
     obs: O,
 ) -> (SessionOutcomes, O) {
     let mut rng = Xoshiro256pp::seed_from_u64(seed);
-    let mut s = Session::with_observer(sel, rules, table_min_cents, budget_cents, false, obs);
+    // The built-in player reads no derived history, so the session type
+    // compiles every accumulator out. A runner generic over the strategy
+    // arrives with the compiled programs.
+    let mut s: Session<'_, O, NoFeatures> =
+        Session::with_observer(sel, rules, table_min_cents, budget_cents, false, obs);
     let cheapest = s.cheapest_selected_stake();
     let mut rolls = 0u64;
     let mut ruin: Option<RuinOutcome> = None;

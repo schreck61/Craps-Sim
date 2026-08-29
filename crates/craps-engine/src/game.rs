@@ -9,10 +9,11 @@ use crate::bets::{
     place_unit, place_win, BetSelection, OddsPolicy, ProgState, Rules, HARD_NUMS, PLACE_NUMS,
 };
 use crate::strategy::action::bet_kind;
-use crate::strategy::{Action, Amount, BetRef};
+use crate::strategy::view::{Features, History, NoFeatures, Stakes};
+use crate::strategy::{Action, Amount, BetRef, FeatureMask, TableView};
 use crate::trace::{BetEvent, BetEventKind, BetKind, Noop, RollObserver};
 
-pub(crate) struct Session<'a, O: RollObserver = Noop> {
+pub(crate) struct Session<'a, O: RollObserver = Noop, F: Features = NoFeatures> {
     /// Observer for tracing; [`Noop`]'s empty inline hooks vanish entirely
     /// under monomorphization.
     pub(crate) obs: O,
@@ -72,9 +73,22 @@ pub(crate) struct Session<'a, O: RollObserver = Noop> {
     pub(crate) p_hard: [ProgState; 4],
     pub(crate) p_any7: ProgState,
     pub(crate) p_anycraps: ProgState,
+    /// What the player sat down with, so profit and drawdown have an
+    /// origin. Read through [`Session::view`], which only the compiled
+    /// strategies call — the built-in player reads the session directly.
+    #[allow(
+        dead_code,
+        reason = "read by TableView; consumed by compiled strategies"
+    )]
+    pub(crate) start_cash: i64,
+    /// Which groups of derived history this session maintains. Empty for
+    /// the built-in player, which reads none of them and pays for none.
+    pub(crate) features: FeatureMask,
+    pub(crate) hist: History,
+    pub(crate) _features: core::marker::PhantomData<F>,
 }
 
-impl<'a> Session<'a, Noop> {
+impl<'a> Session<'a, Noop, NoFeatures> {
     pub(crate) fn new(
         sel: &'a BetSelection,
         rules: &'a Rules,
@@ -86,7 +100,7 @@ impl<'a> Session<'a, Noop> {
     }
 }
 
-impl<'a, O: RollObserver> Session<'a, O> {
+impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
     pub(crate) fn with_observer(
         sel: &'a BetSelection,
         rules: &'a Rules,
@@ -143,6 +157,10 @@ impl<'a, O: RollObserver> Session<'a, O> {
             p_hard: [ProgState::new(rules.prop_bet_cents); 4],
             p_any7: ProgState::new(rules.prop_bet_cents),
             p_anycraps: ProgState::new(rules.prop_bet_cents),
+            start_cash: cash,
+            features: F::MASK,
+            hist: History::new(cash),
+            _features: core::marker::PhantomData,
         }
     }
 
@@ -152,6 +170,13 @@ impl<'a, O: RollObserver> Session<'a, O> {
 
     #[inline(always)]
     pub(crate) fn emit(&mut self, bet: BetKind, kind: BetEventKind, stake_cents: i64) {
+        if F::MASK.has(FeatureMask::STREAKS) && self.features.has(FeatureMask::STREAKS) {
+            match kind {
+                BetEventKind::Won { .. } => self.hist.record_win(bet),
+                BetEventKind::Lost => self.hist.record_loss(bet),
+                _ => {}
+            }
+        }
         self.obs.event(BetEvent {
             bet,
             kind,
@@ -557,6 +582,9 @@ impl<'a, O: RollObserver> Session<'a, O> {
         let t = d1 + d2;
         let is_hard = d1 == d2;
         let was_comeout = self.point.is_none();
+        if !F::MASK.is_empty() && !self.features.is_empty() {
+            self.record_roll(t);
+        }
         self.resolve_come_bets(t, was_comeout);
 
         // --- One-roll bets ---
@@ -760,6 +788,14 @@ impl<'a, O: RollObserver> Session<'a, O> {
                         }
                     }
                     self.point = None;
+                    if F::MASK.has(FeatureMask::DICE.with(FeatureMask::HITS))
+                        && self.features.has(FeatureMask::DICE.with(FeatureMask::HITS))
+                    {
+                        self.end_shooter();
+                    }
+                    if F::MASK.has(FeatureMask::PEAK) && self.features.has(FeatureMask::PEAK) {
+                        self.record_peak();
+                    }
                     return;
                 }
 
@@ -885,6 +921,74 @@ impl<'a, O: RollObserver> Session<'a, O> {
                     self.point = None;
                 }
             }
+        }
+        if F::MASK.has(FeatureMask::PEAK) && self.features.has(FeatureMask::PEAK) {
+            self.record_peak();
+        }
+    }
+
+    /// Per-roll derived history. Split out of [`Session::resolve`] and
+    /// called only when something reads it, so the built-in player's hot
+    /// path is exactly what it was before this existed.
+    fn record_roll(&mut self, total: u8) {
+        if self.features.has(FeatureMask::DICE) {
+            self.hist.last_total = total;
+            self.hist.roll += 1;
+            self.hist.rolls_this_shooter += 1;
+        }
+        if self.features.has(FeatureMask::HITS) {
+            let i = total as usize;
+            self.hist.hits[i] = self.hist.hits[i].saturating_add(1);
+            self.hist.hits_shooter[i] = self.hist.hits_shooter[i].saturating_add(1);
+        }
+    }
+
+    /// A seven-out passes the dice: this shooter's counts start over, the
+    /// session's do not.
+    fn end_shooter(&mut self) {
+        self.hist.shooter += 1;
+        self.hist.rolls_this_shooter = 0;
+        self.hist.hits_shooter = [0; 13];
+    }
+
+    fn record_peak(&mut self) {
+        let wealth = self.cash + self.on_table_face();
+        if wealth > self.hist.peak_wealth {
+            self.hist.peak_wealth = wealth;
+        }
+    }
+
+    /// The read-only borrow a strategy is handed at its decision point.
+    /// Never called by the built-in player, which reads the session
+    /// directly; the compiled interpreter is its first caller.
+    #[allow(dead_code, reason = "the interpreter is its first non-test caller")]
+    pub(crate) fn view(&self) -> TableView<'_> {
+        TableView {
+            point: self.point,
+            cash: self.cash,
+            start_cash: self.start_cash,
+            on_table_face: self.on_table_face(),
+            handle: self.resolved_wagered_cents,
+            live_come: self.live_come_bets(),
+            live_dont_come: self.live_dc_bets(),
+            stakes: Stakes {
+                pass: self.pass,
+                pass_odds: self.pass_odds,
+                dont: self.dont,
+                dont_lay: self.dont_lay,
+                come_flat: self.come_flat,
+                dc_flat: self.dc_flat,
+                place: &self.place,
+                hard: &self.hard,
+                come_points: &self.come_points,
+                come_odds: &self.come_odds,
+                dc_points: &self.dc_points,
+                dc_lay: &self.dc_lay,
+                field: self.field_bet,
+                any7: self.any7_bet,
+                anycraps: self.anycraps_bet,
+            },
+            hist: &self.hist,
         }
     }
 }

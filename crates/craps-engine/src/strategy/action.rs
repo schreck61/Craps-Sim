@@ -20,6 +20,7 @@ use crate::bets::{
     dont_lay_for_win, hard_index, place_index, place_stake, place_unit_of, round_up,
 };
 use crate::game::Session;
+use crate::strategy::view::Features;
 use crate::trace::{BetEventKind, BetKind, RollObserver};
 
 /// Which bet an action concerns. Numbers ride along where a bet lives on a
@@ -123,7 +124,7 @@ struct FlatSpec {
     base: i64,
 }
 
-impl<'a, O: RollObserver> Session<'a, O> {
+impl<O: RollObserver, F: Features> Session<'_, O, F> {
     /// Adjudicate one action. The single site where a strategy's intent
     /// becomes money on the layout.
     #[inline]
