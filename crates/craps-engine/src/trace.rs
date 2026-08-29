@@ -45,9 +45,18 @@ pub enum BetKind {
 pub enum BetEventKind {
     /// Money left the rail onto the layout.
     Placed,
-    /// The bet won; `paid_cents` is the winnings (the stake's return is
-    /// implied by the bet's rules).
-    Won { paid_cents: i64 },
+    /// The bet won. `paid_cents` is the winnings; `stake_returned` says
+    /// whether the stake came back to the rail with them.
+    ///
+    /// It has to be said rather than implied by the bet's rules, because a
+    /// ledger that cannot tell a pass-line win (stake and winnings both
+    /// return) from a place-bet win (the winner stays up and only the
+    /// winnings come back) cannot account for the rail — and the Bench
+    /// promises exactly that accounting, to the cent, at every step.
+    Won {
+        paid_cents: i64,
+        stake_returned: bool,
+    },
     /// The bet lost its stake.
     Lost,
     /// A push: the bet stays where it is (bar-12 on the don't side).
@@ -89,6 +98,28 @@ pub trait RollObserver {
     #[inline(always)]
     fn event(&mut self, ev: BetEvent) {
         let _ = ev;
+    }
+
+    /// Set true to be told which rules fired and what each one asked for.
+    /// Only the Bench wants this; every other observer leaves it false and
+    /// the attribution never runs.
+    const WANTS_RULES: bool = false;
+
+    /// A compiled rule's trigger matched and its guard held. `rule` indexes
+    /// the strategy's rules in the order they were written.
+    #[inline(always)]
+    fn rule_fired(&mut self, rule: u16) {
+        let _ = rule;
+    }
+
+    /// The bet events that follow came from this rule, or from the table
+    /// itself when `None`. Emitted before each proposal reaches the table
+    /// and once more when the decision is over, so the ledger can say which
+    /// line of a strategy moved which money — and can say honestly that a
+    /// bet winning was nobody's doing.
+    #[inline(always)]
+    fn acting_for(&mut self, rule: Option<u16>) {
+        let _ = rule;
     }
 
     /// A roll finished resolving. `roll` counts from 1; `wealth_after` is
@@ -333,7 +364,7 @@ mod tests {
             for ev in &t.events {
                 for be in &ev.events {
                     assert!(be.stake_cents >= 0, "seed {seed}: negative stake");
-                    if let BetEventKind::Won { paid_cents } = be.kind {
+                    if let BetEventKind::Won { paid_cents, .. } = be.kind {
                         assert!(paid_cents > 0, "seed {seed}: non-positive win");
                     }
                 }

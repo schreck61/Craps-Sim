@@ -114,7 +114,7 @@ pub fn paint(
                     be.bet,
                     match be.kind {
                         craps_engine::trace::BetEventKind::Placed => "placed".to_owned(),
-                        craps_engine::trace::BetEventKind::Won { paid_cents } =>
+                        craps_engine::trace::BetEventKind::Won { paid_cents, .. } =>
                             format!("wins {}", numerals::money_text(paid_cents, false)),
                         craps_engine::trace::BetEventKind::Lost => "loses".to_owned(),
                         craps_engine::trace::BetEventKind::Pushed => "pushes".to_owned(),

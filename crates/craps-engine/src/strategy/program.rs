@@ -221,6 +221,16 @@ impl Program {
         cheapest
     }
 
+    /// How many rules this program holds — the length the Bench's fire
+    /// counts must cover, so that a rule which never fired is reported as
+    /// zero rather than missing.
+    pub fn rule_count(&self) -> usize {
+        self.ops
+            .iter()
+            .filter(|op| matches!(op, Op::Rule { .. }))
+            .count()
+    }
+
     /// Instructions executed per decision in the worst case — every rule
     /// firing, every guard passing. The static cost bound Principle 3 buys.
     pub fn cost_bound(&self) -> usize {
@@ -272,6 +282,11 @@ pub(crate) enum Direction {
 #[derive(Clone, Copy, Debug)]
 pub struct Proposals {
     items: [Proposal; MAX_ACTIONS],
+    /// Which rule asked for each proposal, in a parallel array rather than
+    /// inside `Proposal` — carrying it in the enum would grow every slot to
+    /// the next alignment step and cost 376 bytes on a struct built once
+    /// per session, for a field only the Bench ever reads.
+    rules: [u16; MAX_ACTIONS],
     len: usize,
 }
 
@@ -279,6 +294,7 @@ impl Default for Proposals {
     fn default() -> Self {
         Self {
             items: [Proposal::Bet(BetRef::Pass, Amount::Base); MAX_ACTIONS],
+            rules: [0; MAX_ACTIONS],
             len: 0,
         }
     }
@@ -286,9 +302,10 @@ impl Default for Proposals {
 
 impl Proposals {
     #[inline]
-    fn push(&mut self, p: Proposal) {
+    fn push(&mut self, p: Proposal, rule: u16) {
         if self.len < MAX_ACTIONS {
             self.items[self.len] = p;
+            self.rules[self.len] = rule;
             self.len += 1;
         }
     }
@@ -331,9 +348,20 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                 },
                 hist: &self.hist,
             };
-            evaluate(&view, p, &mut self.strat, d, &mut self.proposals);
+            evaluate(
+                &view,
+                p,
+                &mut self.strat,
+                d,
+                &mut self.proposals,
+                &mut self.obs,
+            );
         }
         for i in 0..self.proposals.len {
+            if O::WANTS_RULES {
+                let rule = self.proposals.rules[i];
+                self.obs.acting_for(Some(rule));
+            }
             let action = match self.proposals.items[i] {
                 Proposal::Bet(b, a) => Action::Bet(b, a),
                 Proposal::Down(b) => Action::Down(b),
@@ -358,21 +386,32 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
             };
             let _ = self.apply(action);
         }
+        if O::WANTS_RULES {
+            // The decision is over; whatever the dice do next is the
+            // table's own doing and belongs to no rule.
+            self.obs.acting_for(None);
+        }
     }
 }
 
 /// The machine. Split from the session so it borrows the view immutably and
 /// can be tested against a view alone.
-fn evaluate(
+fn evaluate<O: RollObserver>(
     view: &TableView<'_>,
     p: &Program,
     st: &mut StratState,
     d: Decision,
     out: &mut Proposals,
+    obs: &mut O,
 ) {
     let mut stack = [0i64; STACK_DEPTH];
     let mut sp = 0usize;
     let mut pc = 0usize;
+    // Rules are laid out in order and each begins with exactly one
+    // `Op::Rule`, so counting them as they are walked identifies them
+    // without carrying an index in the instruction — which would have
+    // pushed `Op` past sixteen bytes.
+    let mut rule = u16::MAX;
 
     macro_rules! pop {
         () => {{
@@ -396,9 +435,18 @@ fn evaluate(
                 guard,
                 skip,
             } => {
+                rule = rule.wrapping_add(1);
                 if !trigger_matches(trigger, d) || !guard_holds(guard, view) {
                     pc = skip as usize;
                     continue;
+                }
+                if O::WANTS_RULES && !matches!(guard, Guard::General) {
+                    // A general guard has not been evaluated yet — its ops
+                    // come next — so the rule is not reported as fired
+                    // until `GuardFalse` declines to jump. Reporting here
+                    // would have called every conditional rule fired, which
+                    // is precisely the lie the Bench exists to prevent.
+                    obs.rule_fired(rule);
                 }
                 sp = 0; // each rule starts with a clean stack
             }
@@ -406,6 +454,9 @@ fn evaluate(
                 if pop!() == 0 {
                     pc = skip as usize;
                     continue;
+                }
+                if O::WANTS_RULES {
+                    obs.rule_fired(rule);
                 }
             }
             Op::PushConst(v) => push!(v),
@@ -428,9 +479,9 @@ fn evaluate(
                 let v = pop!();
                 st.vars[i as usize] = v;
             }
-            Op::Down(bet) => out.push(Proposal::Down(bet)),
-            Op::Working(bet, on) => out.push(Proposal::Working(bet, on)),
-            Op::Leave => out.push(Proposal::Leave),
+            Op::Down(bet) => out.push(Proposal::Down(bet), rule),
+            Op::Working(bet, on) => out.push(Proposal::Working(bet, on), rule),
+            Op::Leave => out.push(Proposal::Leave, rule),
             Op::Press(bet, kind) | Op::Regress(bet, kind) => {
                 let value = if kind.takes_operand() { pop!() } else { 0 };
                 let dir = if matches!(p.ops[pc], Op::Press(..)) {
@@ -438,7 +489,7 @@ fn evaluate(
                 } else {
                     Direction::Down
                 };
-                out.push(Proposal::Stake(bet, amount_of(kind, value), dir));
+                out.push(Proposal::Stake(bet, amount_of(kind, value), dir), rule);
             }
             Op::Bet(bet, kind) => {
                 // A flat that is already working is a no-op at the table, so
@@ -450,7 +501,7 @@ fn evaluate(
                     continue;
                 }
                 let value = if kind.takes_operand() { pop!() } else { 0 };
-                out.push(Proposal::Bet(bet, amount_of(kind, value)));
+                out.push(Proposal::Bet(bet, amount_of(kind, value)), rule);
             }
         }
         pc += 1;

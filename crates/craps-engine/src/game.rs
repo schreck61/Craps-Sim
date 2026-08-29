@@ -491,7 +491,10 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                     self.dc_lay_win[i] = 0;
                     self.emit(
                         BetKind::DontComePoint(num),
-                        BetEventKind::Won { paid_cents: flat },
+                        BetEventKind::Won {
+                            paid_cents: flat,
+                            stake_returned: true,
+                        },
                         flat,
                     );
                     if lay > 0 {
@@ -499,6 +502,7 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                             BetKind::DontComeLay(num),
                             BetEventKind::Won {
                                 paid_cents: lay_win,
+                                stake_returned: true,
                             },
                             lay,
                         );
@@ -516,7 +520,10 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                 self.come_points[i] = 0;
                 self.emit(
                     BetKind::ComePoint(t),
-                    BetEventKind::Won { paid_cents: flat },
+                    BetEventKind::Won {
+                        paid_cents: flat,
+                        stake_returned: true,
+                    },
                     flat,
                 );
                 if self.come_odds[i] > 0 {
@@ -528,7 +535,10 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                         self.cash += odds + paid;
                         self.emit(
                             BetKind::ComeOdds(t),
-                            BetEventKind::Won { paid_cents: paid },
+                            BetEventKind::Won {
+                                paid_cents: paid,
+                                stake_returned: true,
+                            },
                             odds,
                         );
                     } else {
@@ -564,7 +574,14 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                     self.cash += flat * 2;
                     progs[S_COME].on_win(&mut self.p_come, self.min, flat);
                     self.come_flat = 0;
-                    self.emit(BetKind::Come, BetEventKind::Won { paid_cents: flat }, flat);
+                    self.emit(
+                        BetKind::Come,
+                        BetEventKind::Won {
+                            paid_cents: flat,
+                            stake_returned: true,
+                        },
+                        flat,
+                    );
                 }
                 2 | 3 | 12 => {
                     self.resolved_wagered_cents += flat;
@@ -592,7 +609,10 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                     self.dc_flat = 0;
                     self.emit(
                         BetKind::DontCome,
-                        BetEventKind::Won { paid_cents: flat },
+                        BetEventKind::Won {
+                            paid_cents: flat,
+                            stake_returned: true,
+                        },
                         flat,
                     );
                 }
@@ -658,6 +678,7 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                     BetKind::Field,
                     BetEventKind::Won {
                         paid_cents: b * win_mult,
+                        stake_returned: true,
                     },
                     b,
                 );
@@ -676,7 +697,10 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                 progs[S_ANY7].on_win(&mut self.p_any7, self.rules.prop_bet_cents, b * 4);
                 self.emit(
                     BetKind::AnySeven,
-                    BetEventKind::Won { paid_cents: b * 4 },
+                    BetEventKind::Won {
+                        paid_cents: b * 4,
+                        stake_returned: true,
+                    },
                     b,
                 );
             } else {
@@ -694,7 +718,10 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                 progs[S_ANYCRAPS].on_win(&mut self.p_anycraps, self.rules.prop_bet_cents, b * 7);
                 self.emit(
                     BetKind::AnyCraps,
-                    BetEventKind::Won { paid_cents: b * 7 },
+                    BetEventKind::Won {
+                        paid_cents: b * 7,
+                        stake_returned: true,
+                    },
                     b,
                 );
             } else {
@@ -717,7 +744,10 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                             self.pass = 0;
                             self.emit(
                                 BetKind::Pass,
-                                BetEventKind::Won { paid_cents: stake },
+                                BetEventKind::Won {
+                                    paid_cents: stake,
+                                    stake_returned: true,
+                                },
                                 stake,
                             );
                         }
@@ -745,7 +775,10 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                             self.dont = 0;
                             self.emit(
                                 BetKind::DontPass,
-                                BetEventKind::Won { paid_cents: stake },
+                                BetEventKind::Won {
+                                    paid_cents: stake,
+                                    stake_returned: true,
+                                },
                                 stake,
                             );
                         }
@@ -798,7 +831,10 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                         self.dont = 0;
                         self.emit(
                             BetKind::DontPass,
-                            BetEventKind::Won { paid_cents: stake },
+                            BetEventKind::Won {
+                                paid_cents: stake,
+                                stake_returned: true,
+                            },
                             stake,
                         );
                     }
@@ -811,7 +847,10 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                         self.dont_lay_win = 0;
                         self.emit(
                             BetKind::DontPassLay,
-                            BetEventKind::Won { paid_cents: paid },
+                            BetEventKind::Won {
+                                paid_cents: paid,
+                                stake_returned: true,
+                            },
                             stake,
                         );
                     }
@@ -870,7 +909,11 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                         progs[S_PLACE + i].on_win(&mut self.p_place[i], base, paid);
                         self.emit(
                             BetKind::Place(t),
-                            BetEventKind::Won { paid_cents: paid },
+                            BetEventKind::Won {
+                                paid_cents: paid,
+                                // The winner stays up.
+                                stake_returned: false,
+                            },
                             cur,
                         );
                         let desired = self.prog_place_stake(i);
@@ -901,7 +944,11 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                             progs[S_HARD + i].on_win(&mut self.p_hard[i], base, paid);
                             self.emit(
                                 BetKind::Hardway(t),
-                                BetEventKind::Won { paid_cents: paid },
+                                BetEventKind::Won {
+                                    paid_cents: paid,
+                                    // The winner stays up.
+                                    stake_returned: false,
+                                },
                                 cur,
                             );
                             let desired =
@@ -943,7 +990,10 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                         self.pass = 0;
                         self.emit(
                             BetKind::Pass,
-                            BetEventKind::Won { paid_cents: stake },
+                            BetEventKind::Won {
+                                paid_cents: stake,
+                                stake_returned: true,
+                            },
                             stake,
                         );
                     }
@@ -955,7 +1005,10 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                         self.pass_odds = 0;
                         self.emit(
                             BetKind::PassOdds,
-                            BetEventKind::Won { paid_cents: paid },
+                            BetEventKind::Won {
+                                paid_cents: paid,
+                                stake_returned: true,
+                            },
                             stake,
                         );
                     }

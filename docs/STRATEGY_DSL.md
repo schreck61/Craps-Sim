@@ -662,6 +662,16 @@ adjudication ledger, per-rule fire counts. Built *before* the editor
 deliberately: §8 is what makes the editor's output trustworthy, and it is the
 debugging surface for P2 and P3 themselves.
 
+- **P4a — done.** The engine half: `bench_session` returns a per-roll ledger
+  of which rules fired, what each asked for, and what the table did about it,
+  plus fire counts covering every rule so a dead one reads as zero rather
+  than as absent. Watching is proven not to change what is watched.
+  `BetEventKind::Won` gained `stake_returned`, because a ledger that cannot
+  tell a pass-line win from a place-bet win cannot account for the rail, and
+  §8 promises exactly that accounting.
+- **P4b — next.** The panel on the Design screen: the stepper, the
+  highlighted rule rows, the ledger in words.
+
 **P5 — The rule editor (10.0 dd).** Typed-slot rows, prose rendering,
 drag-reorder, the static checks of §9 wired into the existing order-ticket
 validation strip. The expensive item, and the cut line (risk 2).
