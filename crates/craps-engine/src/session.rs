@@ -773,9 +773,110 @@ mod tests {
 #[cfg(test)]
 mod bench {
     use super::*;
-    use crate::bets::OddsPolicy;
+    use crate::bets::{OddsPolicy, Progression};
     use crate::summary::summarize_ruin;
     use rayon::prelude::*;
+
+    /// Configurations the strategy-surface gates are measured against
+    /// ([`STRATEGY_DSL.md`](../../../docs/STRATEGY_DSL.md) Part II §3): the
+    /// cheapest player, a full multi-bet player, and a pressed one. A change
+    /// that is free on the pass line but not on a loaded table has to show up
+    /// somewhere, so it shows up here.
+    pub(crate) fn bench_configs() -> Vec<(&'static str, BetSelection, Rules, u64)> {
+        let rules = |odds| Rules {
+            odds_policy: odds,
+            field_12_triple: false,
+            come_odds_work_on_comeout: false,
+            prop_bet_cents: 500,
+            table_max_mult: 1000,
+        };
+        let mut molly = BetSelection {
+            pass_line: true,
+            take_odds: true,
+            ..Default::default()
+        };
+        molly.come_max = 2;
+        let mut loaded = BetSelection {
+            pass_line: true,
+            take_odds: true,
+            field: true,
+            hardways: [true; 4],
+            ..Default::default()
+        };
+        loaded.come_max = 2;
+        loaded.dont_come_max = 1;
+        for n in [4, 5, 6, 8, 9, 10] {
+            loaded.set_place(n, true);
+        }
+        let mut pressed = loaded.clone();
+        pressed.progression = Progression::FullPress;
+        // Session counts differ because a loaded table busts a $300
+        // bankroll in a few dozen rolls; these equalize simulated rolls,
+        // not sessions, so every row times a comparable amount of work.
+        vec![
+            (
+                "pass line",
+                BetSelection::default(),
+                rules(OddsPolicy::None),
+                2_500,
+            ),
+            ("3-pt molly", molly, rules(OddsPolicy::X345), 6_000),
+            ("loaded table", loaded, rules(OddsPolicy::X345), 65_000),
+            (
+                "loaded + full press",
+                pressed,
+                rules(OddsPolicy::X345),
+                190_000,
+            ),
+        ]
+    }
+
+    /// Fixed work on one thread, best of `REPS` — the only throughput
+    /// number stable enough to gate on. [`throughput`] measures the machine
+    /// as much as the engine (94–193 M rolls/s across four runs on one
+    /// commit); best-of-N single-threaded holds within a few percent,
+    /// because scheduling noise only ever adds time. Session counts are
+    /// tuned so every config simulates ≥15 M rolls, and the `spread` column
+    /// reports max/min across reps — anything above ~1.15 means the machine
+    /// was busy and the run should not be used as a gate.
+    ///
+    /// Record a baseline before an engine change, run it again after,
+    /// compare the `rolls/s` column.
+    ///
+    ///   cargo test --release -p craps-engine -- --ignored bench_single_thread --nocapture
+    #[test]
+    #[ignore]
+    fn bench_single_thread() {
+        const REPS: u32 = 7;
+        println!(
+            "\n{:<22} {:>12} {:>11} {:>11} {:>8}",
+            "config", "rolls", "best", "rolls/s", "spread"
+        );
+        for (name, sel, rules, sessions) in bench_configs() {
+            let (mut best, mut worst) = (f64::INFINITY, 0.0f64);
+            let mut rolls = 0u64;
+            for _ in 0..REPS {
+                let start = std::time::Instant::now();
+                let mut total = 0u64;
+                let mut sink = 0i64;
+                for i in 0..sessions {
+                    let o = run_session(&sel, &rules, 1000, 30_000, None, 200_000, 400, i);
+                    total += o.ruin.rolls;
+                    sink += o.horizon.final_cents;
+                }
+                let dt = start.elapsed().as_secs_f64();
+                std::hint::black_box(sink);
+                best = best.min(dt);
+                worst = worst.max(dt);
+                rolls = total;
+            }
+            println!(
+                "{name:<22} {rolls:>12} {best:>10.4}s {:>10.1}M {:>8.2}",
+                rolls as f64 / best / 1e6,
+                worst / best
+            );
+        }
+    }
 
     #[test]
     #[ignore] // manual benchmark: cargo test --release -- --ignored --nocapture
