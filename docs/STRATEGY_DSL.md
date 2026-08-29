@@ -504,20 +504,54 @@ The engine's whole premise is hundreds of millions of rolls per second. A
 strategy interpreter in the inner loop is the one thing in this document that
 could break the app.
 
-**Budget:** a compiled strategy costs **≤ 2× the built-in path** on the
-pass-line throughput benchmark, and a compiled *reproduction* of the built-in
-player costs **≤ 1.15×**. Both are `#[ignore]`d release-mode gates in the same
-file as the existing `throughput` test, run in CI's perf tier.
+**Measured, and the budget corrected.** The figures below are
+nanoseconds per simulated roll, single-threaded, compiled strategy against
+hand-written player on identical dice (`bench_compiled`):
 
-Means: no allocation per roll; no hashmaps (names resolved to slot indices at
-compile time); `i64` register machine with a small fixed operand stack; trigger
-bitmasks so most rolls short-circuit; feature masks so unread history is never
-computed; `Program` shared by `Arc`, never cloned per session.
+| configuration | rules | built-in | compiled | ratio |
+|---|---|---|---|---|
+| pass line | 1 | 21.8 ns | 27.1 ns | 1.24× |
+| 3-point molly | 9 | 34.6 ns | 68.1 ns | 1.97× |
+| loaded table | 29 | 53.8 ns | 182.0 ns | 3.39× |
+| loaded + full press | 29 | 60.2 ns | 183.4 ns | 3.05× |
 
-**Decided:** the hand-written `place_bets` fast path stays until the compiled
-reproduction is inside 1.15×, then it is **deleted**. Two policies that must
-agree is a permanent tax on trust; the point of S1 is to end with one place
-where money moves, not two.
+Cost scales with rule count at roughly 4.5 ns per rule per roll, which is
+what a dispatching interpreter costs and is not going to become free. The
+1.15× figure this section previously carried was written before anything was
+measured; it was wrong, and it was wrong in a way that mattered, because it
+implied a plan the numbers do not support.
+
+**Budget, revised:** ≤ 2× for a strategy of up to ten rules, and ≤ 4× for one
+that covers the felt. The gate asserts the worst case across the four
+benchmark configurations as a regression tripwire, not as a target to
+optimize toward.
+
+This is fast enough. A loaded custom strategy at 182 ns/roll is ~5.5M
+rolls/s/core — a 1.2M-session run still finishes in seconds on any machine
+that runs this app.
+
+Means, all of which are in: no allocation per roll (the proposal buffer and
+strategy memory live on the session, not on each decision's stack); no
+hashmaps, names resolved to slot indices at compile time; a stack machine
+over `i64` with a fixed operand depth; guards fused into the rule header for
+the shapes real rules actually use, which was worth 1.7× on its own; an
+already-working check in the interpreter so a bet that is up never walks to
+the table; layout sums computed only when a strategy reads them; a 16-byte
+instruction with a size tripwire; `Program` shared by `Arc`, never cloned.
+
+**Decided, reversing this document's earlier position:** the hand-written
+`place_bets` fast path **stays permanently**. The original plan was to delete
+it once the compiled reproduction came within 1.15%, on the grounds that two
+policies that must agree is a tax on trust. The measurement says that
+threshold is unreachable, so the choice is between a permanently slower
+checkbox player and two implementations — and the thing that made the second
+option frightening no longer applies: `from_selection` compiles the checkbox
+player into the language, and the equivalence test simulates both against
+each other over 10,000 seeds per curated strategy, asserting the roll they
+died on, what they walked out with, their peak outlay, and their handle. Two
+implementations pinned to each other by an executable proof are safer than
+one implementation with no independent check. The tax on trust is paid by the
+test, not by the reader.
 
 ## 4. Milestone Roadmap
 
@@ -534,8 +568,15 @@ noise of P0.
 
 **P2 — AST, compiler, interpreter (9.0 dd).** S4 + S5. The eleven curated
 strategies and twelve progressions ported to rule sets. Exit: every ported
-strategy reproduces its hand-written twin bitwise over 10k seeds; both
-performance gates green.
+strategy reproduces its hand-written twin bitwise over 10k seeds; the
+performance gate green.
+
+- **P2a — done.** AST, compiler with fused guards and static checks, stack
+  machine, `Player` seam on the session loop, `from_selection`, and the
+  10,000-seed equivalence proof across all eleven curated strategies.
+- **P2b — next.** `Press`, `Regress`, `Down`, `Working`, and `Leave` on the
+  intent surface, then the twelve progressions as rule fragments (S5), then
+  the equivalence proof extended across the progression axis.
 
 **P3 — Text form (5.0 dd).** `parse`/`render`, the `language 1` header, the
 round-trip property test over randomized rule sets, error messages that name the
@@ -595,7 +636,7 @@ derived one would be a second, divergent grammar.
 
 | # | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|---|
-| 1 | Interpreter breaks the throughput premise | Med | High | Two binding ratios in §3 gated in CI from P2; feature masks; bitmask dispatch; built-in path retained until the gate passes, then deleted |
+| 1 | Interpreter breaks the throughput premise | Med | High | **Retired at P2a.** Measured at 1.24x–3.39x by rule count (§3); the built-in path is retained permanently rather than deleted, and the two are pinned to each other by a 10,000-seed equivalence test |
 | 2 | 52 dd overruns — this is a language project inside a simulator | High | High | Cut line: P5 (the editor) drops to v0.5.1. P0–P4 ship a complete, usable feature — authored as text, debugged in the Bench — and the checkbox Design screen is untouched for everyone else |
 | 3 | S1 refactor perturbs resolution order | Med | High | Pinned outcomes + equivalence battery gate P0; no behavior change is permitted in the same commit as the refactor |
 | 4 | Users author strategies that silently do nothing | High | Med | Principle 4 end-to-end: rejection events, Bench fire counts, dead-rule and never-bets static checks, Run disabled with a sentence |

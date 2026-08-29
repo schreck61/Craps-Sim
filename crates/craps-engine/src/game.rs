@@ -5,8 +5,8 @@
 //! rolls against the selected strategy.
 
 use crate::bets::{
-    cheapest_selected_stake, hard_index, hardway_win, pass_odds_win, place_index, place_stake,
-    place_unit, place_win, BetSelection, OddsPolicy, ProgState, Rules, HARD_NUMS, PLACE_NUMS,
+    hard_index, hardway_win, pass_odds_win, place_index, place_stake, place_unit, place_win,
+    BetSelection, OddsPolicy, ProgState, Rules, HARD_NUMS, PLACE_NUMS,
 };
 use crate::strategy::action::bet_kind;
 use crate::strategy::view::{Features, History, NoFeatures, Stakes};
@@ -85,6 +85,12 @@ pub(crate) struct Session<'a, O: RollObserver = Noop, F: Features = NoFeatures> 
     /// the built-in player, which reads none of them and pays for none.
     pub(crate) features: FeatureMask,
     pub(crate) hist: History,
+    /// A compiled strategy's memory. Fixed size and `Copy`, so a decision
+    /// can take it out, run against an immutable view of the table, and put
+    /// it back without fighting the borrow checker over the session.
+    pub(crate) strat: crate::strategy::StratState,
+    /// The decision's proposal buffer, reused rather than rebuilt.
+    pub(crate) proposals: crate::strategy::program::Proposals,
     pub(crate) _features: core::marker::PhantomData<F>,
 }
 
@@ -160,6 +166,8 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
             start_cash: cash,
             features: F::MASK,
             hist: History::new(cash),
+            strat: crate::strategy::StratState::default(),
+            proposals: crate::strategy::program::Proposals::default(),
             _features: core::marker::PhantomData,
         }
     }
@@ -295,9 +303,12 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
             + self.anycraps_bet
     }
 
-    /// Cheapest stake among selected recurring bets — used to decide ruin.
+    /// Cheapest stake among selected recurring bets — what the built-in
+    /// player answers when the session asks what ruin means for it. A
+    /// compiled program answers the same question from its own bets.
+    #[cfg(test)]
     pub(crate) fn cheapest_selected_stake(&self) -> i64 {
-        cheapest_selected_stake(self.sel, self.rules, self.min)
+        crate::bets::cheapest_selected_stake(self.sel, self.rules, self.min)
     }
 
     /// The built-in player, expressed as intents.
@@ -582,8 +593,14 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
         let t = d1 + d2;
         let is_hard = d1 == d2;
         let was_comeout = self.point.is_none();
-        if !F::MASK.is_empty() && !self.features.is_empty() {
-            self.record_roll(t);
+        if !F::MASK.is_empty() {
+            self.hist.fired = 0;
+            self.hist.won = 0;
+            self.hist.lost = 0;
+            self.hist.last_total_now = t;
+            if !self.features.is_empty() {
+                self.record_roll(t);
+            }
         }
         self.resolve_come_bets(t, was_comeout);
 
@@ -722,6 +739,9 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                     }
                     _ => {
                         self.point = Some(t);
+                        if !F::MASK.is_empty() {
+                            self.hist.fired |= crate::strategy::program::fired::POINT_ESTABLISHED;
+                        }
                     }
                 }
             }
@@ -788,6 +808,9 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                         }
                     }
                     self.point = None;
+                    if !F::MASK.is_empty() {
+                        self.hist.fired |= crate::strategy::program::fired::SEVEN_OUT;
+                    }
                     if F::MASK.has(FeatureMask::DICE.with(FeatureMask::HITS))
                         && self.features.has(FeatureMask::DICE.with(FeatureMask::HITS))
                     {
@@ -919,6 +942,9 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                         self.emit(BetKind::DontPassLay, BetEventKind::Lost, stake);
                     }
                     self.point = None;
+                    if !F::MASK.is_empty() {
+                        self.hist.fired |= crate::strategy::program::fired::POINT_MADE;
+                    }
                 }
             }
         }
@@ -967,10 +993,7 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
             point: self.point,
             cash: self.cash,
             start_cash: self.start_cash,
-            on_table_face: self.on_table_face(),
             handle: self.resolved_wagered_cents,
-            live_come: self.live_come_bets(),
-            live_dont_come: self.live_dc_bets(),
             stakes: Stakes {
                 pass: self.pass,
                 pass_odds: self.pass_odds,

@@ -6,7 +6,8 @@
 use crate::bets::{BetSelection, Rules};
 use crate::game::Session;
 use crate::rng::Xoshiro256pp;
-use crate::strategy::NoFeatures;
+use crate::strategy::player::{Builtin, Compiled, Player};
+use crate::strategy::Program;
 use crate::trace::{Noop, RollObserver};
 
 /// Which simulation phase a session belongs to. Part of the seed so the two
@@ -124,13 +125,43 @@ pub(crate) fn run_session_impl<O: RollObserver>(
     seed: u64,
     obs: O,
 ) -> (SessionOutcomes, O) {
+    run_with_player(
+        &Builtin,
+        sel,
+        rules,
+        table_min_cents,
+        budget_cents,
+        quit_target_cents,
+        max_rolls,
+        horizon_rolls,
+        seed,
+        obs,
+    )
+}
+
+/// The one session loop, generic over who is playing.
+///
+/// Everything about when a session ends — ruin, the horizon freeze, the
+/// take-profit rule, the roll cap — lives here and is the same for every
+/// player. What to bet is the player's business and appears in this
+/// function exactly three times.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_with_player<O: RollObserver, P: Player>(
+    player: &P,
+    sel: &BetSelection,
+    rules: &Rules,
+    table_min_cents: i64,
+    budget_cents: i64,
+    quit_target_cents: Option<i64>,
+    max_rolls: u64,
+    horizon_rolls: u64,
+    seed: u64,
+    obs: O,
+) -> (SessionOutcomes, O) {
     let mut rng = Xoshiro256pp::seed_from_u64(seed);
-    // The built-in player reads no derived history, so the session type
-    // compiles every accumulator out. A runner generic over the strategy
-    // arrives with the compiled programs.
-    let mut s: Session<'_, O, NoFeatures> =
+    let mut s: Session<'_, O, P::Feat> =
         Session::with_observer(sel, rules, table_min_cents, budget_cents, false, obs);
-    let cheapest = s.cheapest_selected_stake();
+    let cheapest = player.cheapest_stake(&s);
     let mut rolls = 0u64;
     let mut ruin: Option<RuinOutcome> = None;
     let mut horizon: Option<HorizonOutcome> = None;
@@ -158,8 +189,8 @@ pub(crate) fn run_session_impl<O: RollObserver>(
             };
             return (out, s.into_observer());
         }
-        if s.needs_placement || s.one_roll_selected {
-            s.place_bets();
+        if player.wants_decision(&s) {
+            player.decide(&mut s);
         }
         if !s.has_multi_roll_bets() && !s.has_one_roll_bets() && s.cash < cheapest {
             let out = SessionOutcomes {
@@ -225,6 +256,46 @@ pub(crate) fn run_session_impl<O: RollObserver>(
             return (out, s.into_observer());
         }
     }
+}
+
+/// Play a compiled strategy, on the same dice any other player would see.
+///
+/// The session is otherwise identical: same seed formula, same ruin rule,
+/// same horizon freeze, same take-profit rule. Only the player differs.
+///
+/// A compiled program carries its own pressing as rules, so the session runs
+/// with the built-in progression machinery idle — the flat selection passed
+/// here exists because [`Session`] still holds the checkbox player's
+/// configuration, and is never read by a compiled player.
+#[allow(clippy::too_many_arguments)]
+pub fn run_program_session(
+    program: &Program,
+    rules: &Rules,
+    table_min_cents: i64,
+    budget_cents: i64,
+    quit_target_cents: Option<i64>,
+    max_rolls: u64,
+    horizon_rolls: u64,
+    seed: u64,
+) -> SessionOutcomes {
+    let idle = BetSelection {
+        pass_line: false,
+        ..Default::default()
+    };
+    let cheapest = program.cheapest_stake(rules, table_min_cents);
+    run_with_player(
+        &Compiled::new(program, cheapest),
+        &idle,
+        rules,
+        table_min_cents,
+        budget_cents,
+        quit_target_cents,
+        max_rolls,
+        horizon_rolls,
+        seed,
+        Noop,
+    )
+    .0
 }
 
 /// Play until the bankroll can no longer sustain the strategy, until the
@@ -834,6 +905,73 @@ mod bench {
                 190_000,
             ),
         ]
+    }
+
+    /// What a compiled strategy costs against the hand-written player, in
+    /// nanoseconds per simulated roll on identical dice. The measured
+    /// figures and the budget they justify are in STRATEGY_DSL.md Part II
+    /// §3; this asserts only the regression tripwire.
+    ///
+    /// Cost is nanoseconds *per simulated roll*, not per session. The two
+    /// players must not be assumed to live the same length of session — the
+    /// pressed configuration does not, because `from_selection` compiles the
+    /// bets and not yet the progression, so the compiled player there plays
+    /// flat and survives far longer. Comparing seconds-per-session across
+    /// that would report a 12x slowdown that is really a 10x difference in
+    /// work done, which is how this benchmark read before it was fixed.
+    ///
+    ///   cargo test --release -p craps-engine -- --ignored bench_compiled --nocapture
+    #[test]
+    #[ignore]
+    fn bench_compiled() {
+        use crate::strategy::{compile, from_selection};
+        const REPS: u32 = 7;
+        println!(
+            "\n{:<22} {:>12} {:>12} {:>8}",
+            "config", "built-in", "compiled", "ratio"
+        );
+        let mut worst: f64 = 0.0;
+        for (name, sel, rules, sessions) in bench_configs() {
+            let program = compile(&from_selection(&sel, &rules)).unwrap();
+            let mut builtin_ns = f64::INFINITY;
+            let mut compiled_ns = f64::INFINITY;
+            for _ in 0..REPS {
+                let t = std::time::Instant::now();
+                let mut rolls = 0u64;
+                let mut sink = 0i64;
+                for i in 0..sessions {
+                    let o = run_session(&sel, &rules, 1000, 30_000, None, 200_000, 400, i);
+                    rolls += o.ruin.rolls;
+                    sink += o.horizon.final_cents;
+                }
+                std::hint::black_box(sink);
+                builtin_ns = builtin_ns.min(t.elapsed().as_secs_f64() * 1e9 / rolls as f64);
+
+                let t = std::time::Instant::now();
+                let mut rolls = 0u64;
+                let mut sink = 0i64;
+                for i in 0..sessions {
+                    let o =
+                        run_program_session(&program, &rules, 1000, 30_000, None, 200_000, 400, i);
+                    rolls += o.ruin.rolls;
+                    sink += o.horizon.final_cents;
+                }
+                std::hint::black_box(sink);
+                compiled_ns = compiled_ns.min(t.elapsed().as_secs_f64() * 1e9 / rolls as f64);
+            }
+            let ratio = compiled_ns / builtin_ns;
+            worst = worst.max(ratio);
+            println!("{name:<22} {builtin_ns:>9.2} ns/r {compiled_ns:>9.2} ns/r {ratio:>7.2}x");
+        }
+        println!("\nworst ratio {worst:.2}x (tripwire: 4.0x)");
+        // A regression tripwire, not a target. Cost scales with rule count
+        // at roughly 4.5 ns per rule per roll; the loaded configurations
+        // carry 29 rules and sit at 3.4x. See STRATEGY_DSL.md Part II §3
+        // for why the 1.15x this once asserted was the wrong number.
+        assert!(
+            worst <= 4.0,
+            "compiled strategies cost {worst:.2}x the built-in player; the tripwire is 4.0x"
+        );
     }
 
     /// Fixed work on one thread, best of `REPS` — the only throughput

@@ -14,7 +14,16 @@
 //! Design and roadmap: [`STRATEGY_DSL.md`](../../../docs/STRATEGY_DSL.md).
 
 pub mod action;
+pub mod ast;
+pub mod compile;
+pub mod library;
+pub mod player;
+pub mod program;
 pub mod view;
 
 pub use action::{Action, Adjudication, Amount, BetRef, RejectReason};
+pub use ast::{AmountExpr, BinOp, Expr, Group, Read, Rule, Stmt, Strategy, Trigger, VarId};
+pub use compile::{compile, CompileError};
+pub use library::from_selection;
+pub use program::{Decision, Program, StratState};
 pub use view::{AllFeatures, FeatureMask, NoFeatures, TableView};

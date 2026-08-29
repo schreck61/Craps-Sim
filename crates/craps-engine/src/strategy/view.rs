@@ -163,6 +163,17 @@ pub(crate) struct History {
     pub streak: [i16; STREAMS],
     /// Highest total wealth seen, for the drawdown a stop-loss reads.
     pub peak_wealth: i64,
+    /// Coarse triggers that fired on the roll just resolved, and the
+    /// streams that won or lost on it. Cleared at the start of each roll;
+    /// read once, at the decision point that follows.
+    pub fired: u8,
+    pub won: u32,
+    pub lost: u32,
+    /// The total of the roll just resolved. Distinct from `last_total`,
+    /// which only exists when a strategy declared it wanted dice history;
+    /// a `total(7)` trigger needs the number whether or not it also wanted
+    /// the counter.
+    pub last_total_now: u8,
 }
 
 impl History {
@@ -178,6 +189,10 @@ impl History {
             losses: [0; STREAMS],
             streak: [0; STREAMS],
             peak_wealth: start_cash,
+            fired: 0,
+            won: 0,
+            lost: 0,
+            last_total_now: 0,
         }
     }
 
@@ -186,6 +201,7 @@ impl History {
         if let Some(i) = stream_index(bet) {
             self.wins[i] = self.wins[i].saturating_add(1);
             self.streak[i] = self.streak[i].max(0).saturating_add(1);
+            self.won |= 1 << i;
         }
     }
 
@@ -194,6 +210,7 @@ impl History {
         if let Some(i) = stream_index(bet) {
             self.losses[i] = self.losses[i].saturating_add(1);
             self.streak[i] = self.streak[i].min(0).saturating_sub(1);
+            self.lost |= 1 << i;
         }
     }
 }
@@ -208,10 +225,7 @@ pub struct TableView<'s> {
     pub(crate) point: Option<u8>,
     pub(crate) cash: i64,
     pub(crate) start_cash: i64,
-    pub(crate) on_table_face: i64,
     pub(crate) handle: i64,
-    pub(crate) live_come: u8,
-    pub(crate) live_dont_come: u8,
     pub(crate) stakes: Stakes<'s>,
     pub(crate) hist: &'s History,
 }
@@ -287,7 +301,7 @@ impl TableView<'_> {
     /// leave with if they picked everything up right now.
     #[inline]
     pub fn wealth(&self) -> i64 {
-        self.cash + self.on_table_face
+        self.cash + self.on_table_face()
     }
 
     /// Wealth less what the player sat down with. Negative is losing.
@@ -345,22 +359,72 @@ impl TableView<'_> {
         }
     }
 
+    /// What sits in the slot the table would write if this bet were made
+    /// now — which is not always what [`TableView::stake`] reports.
+    ///
+    /// `stake(Come)` answers the question a player asks: how much do I have
+    /// riding on come, box and numbers together. The table's slot is the
+    /// come box alone, because a flat established on a number no longer
+    /// blocks a new one. Betting idempotence is about the slot, so the
+    /// interpreter's already-up check uses this and nothing else.
+    pub(crate) fn slot_stake(&self, bet: BetRef) -> i64 {
+        match bet {
+            BetRef::Come => self.stakes.come_flat,
+            BetRef::DontCome => self.stakes.dc_flat,
+            other => self.stake(other),
+        }
+    }
+
+    // The three below walk the layout, so they are computed when asked and
+    // not before. A view is built for every decision of every session, and
+    // a strategy that never asks what its whole layout is worth should not
+    // pay for the sum.
+
     /// Come bets working, counting one still in the come box.
     #[inline]
     pub fn live_come(&self) -> i64 {
-        self.live_come as i64
+        let s = &self.stakes;
+        (s.come_flat > 0) as i64 + s.come_points.iter().filter(|&&b| b > 0).count() as i64
+    }
+
+    /// The come flat established on this number, 0 if none. Distinct from
+    /// the odds behind it, which `stake(ComeOdds(n))` reports.
+    #[inline]
+    pub fn come_point(&self, num: u8) -> i64 {
+        at(self.stakes.come_points, num)
+    }
+
+    /// The don't come flat established on this number, 0 if none.
+    #[inline]
+    pub fn dont_come_point(&self, num: u8) -> i64 {
+        at(self.stakes.dc_points, num)
     }
 
     /// Don't come bets working, same convention.
     #[inline]
     pub fn live_dont_come(&self) -> i64 {
-        self.live_dont_come as i64
+        let s = &self.stakes;
+        (s.dc_flat > 0) as i64 + s.dc_points.iter().filter(|&&b| b > 0).count() as i64
     }
 
     /// Face value of everything on the layout.
-    #[inline]
     pub fn on_table_face(&self) -> i64 {
-        self.on_table_face
+        let s = &self.stakes;
+        s.pass
+            + s.pass_odds
+            + s.dont
+            + s.dont_lay
+            + s.come_flat
+            + s.dc_flat
+            + s.field
+            + s.any7
+            + s.anycraps
+            + s.place.iter().sum::<i64>()
+            + s.hard.iter().sum::<i64>()
+            + s.come_points.iter().sum::<i64>()
+            + s.come_odds.iter().sum::<i64>()
+            + s.dc_points.iter().sum::<i64>()
+            + s.dc_lay.iter().sum::<i64>()
     }
 
     // --- Derived history ---

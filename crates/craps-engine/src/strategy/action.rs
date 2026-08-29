@@ -46,6 +46,10 @@ pub enum BetRef {
 /// payout units and the odds policy are table rules, not strategy choices.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Amount {
+    /// The table's own base stake for this bet: the table minimum rounded
+    /// up to the bet's payout unit, or the configured prop stake. What a
+    /// flat player bets without having to name a number.
+    Base,
     /// Exactly this many cents, rounded up to the bet's payout unit.
     Cents(i64),
     /// This many table minimums, rounded up to the bet's payout unit.
@@ -149,7 +153,7 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
         if *self.slot(spec.slot) != 0 {
             return Ok(0); // already up; `Bet` is idempotent
         }
-        let want = self.resolve_amount(bet, amount)?;
+        let want = self.resolve_amount(bet, amount, spec.base)?;
         match self.try_stake_or_base(want, spec.base) {
             Some(a) => {
                 *self.slot_mut(spec.slot) = a;
@@ -245,7 +249,7 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
             BetRef::PassOdds => {
                 let target = match amount {
                     Amount::MaxOdds => self.pass * mult,
-                    other => self.resolve_amount(bet, other)?,
+                    other => self.resolve_amount(bet, other, 0)?,
                 };
                 if target <= self.pass_odds {
                     return Ok(0);
@@ -264,7 +268,7 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                 // Lays are sized by what they win, not what they risk.
                 let target_win = match amount {
                     Amount::MaxOdds => self.dont * mult,
-                    other => self.resolve_amount(bet, other)?,
+                    other => self.resolve_amount(bet, other, 0)?,
                 };
                 if target_win <= self.dont_lay_win {
                     return Ok(0);
@@ -284,7 +288,7 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                 let i = place_index(num).expect("come odds on a non-point number");
                 let target = match amount {
                     Amount::MaxOdds => self.come_points[i] * mult,
-                    other => self.resolve_amount(bet, other)?,
+                    other => self.resolve_amount(bet, other, 0)?,
                 };
                 if target <= self.come_odds[i] {
                     return Ok(0);
@@ -302,7 +306,7 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                 let i = place_index(num).expect("dc lay on a non-point number");
                 let target_win = match amount {
                     Amount::MaxOdds => self.dc_points[i] * mult,
-                    other => self.resolve_amount(bet, other)?,
+                    other => self.resolve_amount(bet, other, 0)?,
                 };
                 if target_win <= self.dc_lay_win[i] {
                     return Ok(0);
@@ -337,8 +341,9 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
     /// payout stays whole — money is integer cents end to end, and a stake
     /// that could pay $12.333… is not a stake this table takes.
     #[inline]
-    fn resolve_amount(&self, bet: BetRef, amount: Amount) -> Adjudication {
+    fn resolve_amount(&self, bet: BetRef, amount: Amount, base: i64) -> Adjudication {
         let raw = match amount {
+            Amount::Base => return Ok(base),
             Amount::Cents(c) => c,
             Amount::Units(n) => n.saturating_mul(self.min),
             // Only reachable when a strategy asks for max odds on a bet that
