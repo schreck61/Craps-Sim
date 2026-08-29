@@ -9,15 +9,16 @@
 //! what they ask — not to be a menu. Whether any of them is a good idea is
 //! the Explorer's business, and the answer is no.
 //!
-//! They are also the reference for what the text form (P3) must parse to:
-//! whatever `strategy "Press twice, then collect"` reads like, it has to
-//! produce the tree that [`press_twice_then_collect`] builds by hand.
+//! They are written in the language itself rather than assembled as trees,
+//! which is the point: if the text form could not say them, it would not be
+//! the second editor Principle 2 claims it is — it would be a subset with a
+//! nicer face.
 
 #![cfg(test)]
 
 use crate::bets::{BetSelection, OddsPolicy, Progression, Rules};
-use crate::strategy::ast::{AmountExpr, BinOp, Expr, Read, Rule, Stmt, Strategy, Trigger};
-use crate::strategy::{compile, BetRef};
+use crate::strategy::ast::Strategy;
+use crate::strategy::{compile, parse};
 
 fn rules() -> Rules {
     Rules {
@@ -29,162 +30,116 @@ fn rules() -> Rules {
     }
 }
 
-fn point_on() -> Expr {
-    Expr::bin(BinOp::Ne, Expr::Read(Read::Point), Expr::Const(0))
-}
-
 /// > *Place the 6 and 8; press each on its first two hits; regress after
 /// > that.*
 ///
 /// The thing that could not be said before: a bet whose size depends on how
 /// many times its own number has come.
-fn press_twice_then_collect() -> Strategy {
-    let mut rules = vec![Rule::new(
-        Trigger::ComeOut,
-        vec![Stmt::Bet(BetRef::Pass, AmountExpr::Base)],
-    )];
-    for n in [6u8, 8] {
-        rules.push(
-            Rule::new(
-                Trigger::Roll,
-                vec![Stmt::Bet(BetRef::Place(n), AmountExpr::Base)],
-            )
-            .when(Expr::bin(
-                BinOp::And,
-                point_on(),
-                Expr::bin(BinOp::Ne, Expr::Read(Read::Point), Expr::Const(n as i64)),
-            )),
-        );
-        rules.push(
-            Rule::new(
-                Trigger::Win(BetRef::Place(n)),
-                vec![Stmt::Press(
-                    BetRef::Place(n),
-                    AmountExpr::Cents(Expr::bin(
-                        BinOp::Mul,
-                        Expr::Read(Read::Stake(BetRef::Place(n))),
-                        Expr::Const(2),
-                    )),
-                )],
-            )
-            .when(Expr::bin(
-                BinOp::Le,
-                Expr::Read(Read::HitsThisShooter(n)),
-                Expr::Const(2),
-            )),
-        );
-        rules.push(
-            Rule::new(
-                Trigger::Win(BetRef::Place(n)),
-                vec![Stmt::Regress(BetRef::Place(n), AmountExpr::Base)],
-            )
-            .when(Expr::bin(
-                BinOp::Gt,
-                Expr::Read(Read::HitsThisShooter(n)),
-                Expr::Const(2),
-            )),
-        );
-    }
-    Strategy::new("Press twice, then collect", rules)
-}
+const PRESS_TWICE: &str = r#"
+strategy "Press twice, then collect" language 1
+
+on come-out:
+    bet pass base
+
+on roll when point != 0 and point != 6:
+    bet place 6 base
+
+on roll when point != 0 and point != 8:
+    bet place 8 base
+
+on win of place 6 when hits-this-shooter(6) <= 2:
+    press place 6 to stake(place 6) * 2
+
+on win of place 6 when hits-this-shooter(6) > 2:
+    regress place 6 to base
+
+on win of place 8 when hits-this-shooter(8) <= 2:
+    press place 8 to stake(place 8) * 2
+
+on win of place 8 when hits-this-shooter(8) > 2:
+    regress place 8 to base
+"#;
 
 /// > *Place bets off after a seven-out until the shooter makes a point.*
 ///
 /// Memory, and a bet that sits on the felt resolving nothing.
-fn off_until_the_shooter_proves_himself() -> Strategy {
-    let trusted = 0u16;
-    let mut s = Strategy::new(
-        "Off until the shooter proves himself",
-        vec![
-            Rule::new(Trigger::SevenOut, vec![Stmt::Set(trusted, Expr::Const(0))]),
-            Rule::new(Trigger::PointMade, vec![Stmt::Set(trusted, Expr::Const(1))]),
-            Rule::new(
-                Trigger::Roll,
-                vec![
-                    Stmt::Bet(BetRef::Place(6), AmountExpr::Base),
-                    Stmt::Bet(BetRef::Place(8), AmountExpr::Base),
-                ],
-            )
-            .when(point_on()),
-            Rule::new(
-                Trigger::Roll,
-                vec![
-                    Stmt::Working(BetRef::Place(6), false),
-                    Stmt::Working(BetRef::Place(8), false),
-                ],
-            )
-            .when(Expr::bin(BinOp::Eq, Expr::Var(trusted), Expr::Const(0))),
-            Rule::new(
-                Trigger::Roll,
-                vec![
-                    Stmt::Working(BetRef::Place(6), true),
-                    Stmt::Working(BetRef::Place(8), true),
-                ],
-            )
-            .when(Expr::bin(BinOp::Eq, Expr::Var(trusted), Expr::Const(1))),
-        ],
-    );
-    s.vars = vec!["trusted".into()];
-    s
-}
+const OFF_UNTIL_TRUSTED: &str = r#"
+strategy "Off until the shooter proves himself" language 1
+
+var trusted = 0
+
+on seven-out:
+    set trusted = 0
+
+on point-made:
+    set trusted = 1
+
+on roll when point != 0:
+    bet place 6 base
+    bet place 8 base
+
+on roll when trusted == 0:
+    working place 6 off
+    working place 8 off
+
+on roll when trusted == 1:
+    working place 6 on
+    working place 8 on
+"#;
 
 /// > *Stop at −$200 or +$150, whichever comes first.*
-fn stop_loss_and_stop_win() -> Strategy {
-    Strategy::new(
-        "Stop loss and stop win",
-        vec![
-            Rule::new(
-                Trigger::ComeOut,
-                vec![Stmt::Bet(BetRef::Pass, AmountExpr::Base)],
-            ),
-            Rule::new(Trigger::Roll, vec![Stmt::Leave]).when(Expr::bin(
-                BinOp::Or,
-                Expr::bin(BinOp::Ge, Expr::Read(Read::Profit), Expr::Const(15_000)),
-                Expr::bin(BinOp::Le, Expr::Read(Read::Profit), Expr::Const(-20_000)),
-            )),
-        ],
-    )
-}
+const STOP_RULES: &str = r#"
+strategy "Stop loss and stop win" language 1
+
+on come-out:
+    bet pass base
+
+on roll when profit >= $150 or profit <= -$200:
+    leave "enough"
+"#;
 
 /// > *Bet the field only after two field numbers in a row.*
 ///
 /// Nonsense, faithfully modeled. Principle 5: a language that could only
 /// express sound play could not refute unsound play, and refutation is the
 /// product.
+const FIELD_IS_DUE: &str = r#"
+strategy "The field is due" language 1
+
+var streak = 0
+
+on roll when last-total <= 4 or last-total >= 9:
+    set streak = streak + 1
+
+on roll when not (last-total <= 4 or last-total >= 9):
+    set streak = 0
+
+on roll when streak >= 2:
+    bet field base
+"#;
+
+/// Every example, as written above.
+fn all() -> Vec<Strategy> {
+    [PRESS_TWICE, OFF_UNTIL_TRUSTED, STOP_RULES, FIELD_IS_DUE]
+        .iter()
+        .map(|src| parse(src).unwrap_or_else(|e| panic!("{}", e.message())))
+        .collect()
+}
+
+fn press_twice_then_collect() -> Strategy {
+    parse(PRESS_TWICE).unwrap()
+}
+
+fn off_until_the_shooter_proves_himself() -> Strategy {
+    parse(OFF_UNTIL_TRUSTED).unwrap()
+}
+
+fn stop_loss_and_stop_win() -> Strategy {
+    parse(STOP_RULES).unwrap()
+}
+
 fn the_field_is_due() -> Strategy {
-    let streak = 0u16;
-    let field_number = |e: Expr| e;
-    let is_field = Expr::bin(
-        BinOp::Or,
-        Expr::bin(
-            BinOp::Le,
-            field_number(Expr::Read(Read::LastTotal)),
-            Expr::Const(4),
-        ),
-        Expr::bin(BinOp::Ge, Expr::Read(Read::LastTotal), Expr::Const(9)),
-    );
-    let mut s = Strategy::new(
-        "The field is due",
-        vec![
-            Rule::new(
-                Trigger::Roll,
-                vec![Stmt::Set(
-                    streak,
-                    Expr::bin(BinOp::Add, Expr::Var(streak), Expr::Const(1)),
-                )],
-            )
-            .when(is_field.clone()),
-            Rule::new(Trigger::Roll, vec![Stmt::Set(streak, Expr::Const(0))])
-                .when(Expr::Not(Box::new(is_field))),
-            Rule::new(
-                Trigger::Roll,
-                vec![Stmt::Bet(BetRef::Field, AmountExpr::Base)],
-            )
-            .when(Expr::bin(BinOp::Ge, Expr::Var(streak), Expr::Const(2))),
-        ],
-    );
-    s.vars = vec!["streak".into()];
-    s
+    parse(FIELD_IS_DUE).unwrap()
 }
 
 #[cfg(test)]
@@ -194,6 +149,16 @@ mod tests {
     use crate::strategy::FeatureMask;
 
     /// Every example compiles, and declares exactly the history it reads.
+    /// Every example survives the round trip, so what is written above is
+    /// exactly what the tree holds.
+    #[test]
+    fn the_examples_round_trip_through_their_own_text() {
+        for s in all() {
+            let back = crate::strategy::parse(&crate::strategy::render(&s)).unwrap();
+            assert_eq!(s, back, "{}", s.name);
+        }
+    }
+
     #[test]
     fn the_examples_compile_and_declare_what_they_read() {
         let cases = [

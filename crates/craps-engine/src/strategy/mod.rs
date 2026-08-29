@@ -20,6 +20,7 @@ mod examples;
 pub mod library;
 pub mod player;
 pub mod program;
+pub mod text;
 pub mod view;
 
 pub use action::{Action, Adjudication, Amount, BetRef, RejectReason};
@@ -27,4 +28,5 @@ pub use ast::{AmountExpr, BinOp, Expr, Group, Read, Rule, Stmt, Strategy, Trigge
 pub use compile::{compile, CompileError};
 pub use library::from_selection;
 pub use program::{Decision, Program, StratState};
+pub use text::{parse, render, ParseError, LANGUAGE_VERSION};
 pub use view::{AllFeatures, FeatureMask, NoFeatures, TableView};

@@ -237,28 +237,57 @@ For authors who would rather type, and for pasting a strategy between users:
 ```
 strategy "44 Inside, regressed" language 1
 
-  var hits = 0
+var hits = 0
 
-  on point-established:
-      bet place inside 2u              # $22 inside at a $5 table
+press half-press for place 6          # per stream; bare `press x` sets all
 
-  on win of any place:
-      set hits = hits + 1
-      when hits == 2: regress all place to 1u
-      when hits >= 4: down all place
+on point-established:
+    bet place inside 2 units          # $22 inside at a $5 table
 
-  on seven-out:
-      set hits = 0
+on win of place 6:
+    set hits = hits + 1
+    press place 6 to stake(place 6) * 2
 
-  on roll when profit <= -20000:
-      leave "stop-loss"
+on roll when hits >= 4:
+    down all place
+
+on seven-out:
+    set hits = 0
+
+on roll when profit <= -$200 or profit >= $150:
+    leave "enough"
 ```
 
-`render(parse(text)) == text` and `parse(render(ast)) == ast`, both property-
-tested over randomized rule sets — the same law the Scenario Sentence already
-obeys. The `language 1` header is binding: the parser refuses a version it does
-not know rather than guessing, so a saved strategy never silently changes
-meaning under a grammar revision.
+`parse(render(ast)) == ast` and `render(parse(text)) == text`, both
+property-tested over 400 randomized rule sets — the same law the Scenario
+Sentence already obeys. Every example in §7 is written this way and simulated,
+because a text form that could not say them would be a subset with a nicer
+face rather than the second editor Principle 2 claims.
+
+Three things the sketch above got wrong before the grammar existed, corrected
+here rather than quietly:
+
+- **A condition belongs to a rule, not to a statement.** The original sketch
+  nested `when hits == 2: regress …` inside a body. There is no such form: a
+  rule is `on <trigger> [when <expr>]:` and its body is unconditional. Nesting
+  would have made the tree and the text different shapes, which is the one
+  thing Principle 2 forbids.
+- **Per-stream pressing says `for`, not `on`.** `press martingale on dont pass`
+  and `press martingale` followed by `on seven-out:` cannot be told apart
+  without the parser knowing every trigger word — a grammar that needs that
+  lookahead breaks the day a trigger is added.
+- **Operators need spaces.** `dont-pass` and `hits-this-shooter` are single
+  words, so `a - b` is subtraction and `a-b` is an identifier that does not
+  exist. `-200` is still a negative literal. This is what lets every bet be
+  spelled the way craps spells it without a symbol table in the tokenizer.
+
+Groups (`place inside`, `all hardways`) are parse-time sugar: they expand into
+one statement per member and never render back as a group, because the tree
+holds the members and the law is about the tree.
+
+The `language 1` header is binding: the parser refuses a version it does not
+know rather than guessing, so a saved strategy never silently changes meaning
+under a grammar revision.
 
 ## 6. Progressions Are Declared Per Stream
 
@@ -619,12 +648,14 @@ performance gate green.
 resolves; a rule may then override it at the decision point. Last write
 wins, the same ordering that governs two rules touching one bet.
 
-**P3 — Text form (5.0 dd).** `parse`/`render`, the `language 1` header, the
-round-trip property test over randomized rule sets, error messages that name the
-offending token (the pattern
-[sentence.rs](../crates/craps-app/src/sentence.rs) already establishes). Exit:
-strategies are authorable by paste; the feature is usable by a power user with
-no GUI work at all.
+**P3 — Text form (5.0 dd). Done.** `parse`/`render`, the `language 1` header,
+the round-trip property test over 400 randomized rule sets, and error messages
+that name the offending token and its line (the pattern
+[sentence.rs](../crates/craps-app/src/sentence.rs) already establishes).
+Strategies are authorable by paste, and a parsed strategy is proven to play
+the identical session to the tree it came from — the round-trip law extended
+through the compiler and the engine to the money. The §5.2 corrections were
+found here.
 
 **P4 — The Bench (6.0 dd).** Rule attribution events, the stepper panel, the
 adjudication ledger, per-rule fire counts. Built *before* the editor
