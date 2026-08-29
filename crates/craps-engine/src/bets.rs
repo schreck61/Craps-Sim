@@ -414,6 +414,14 @@ pub(crate) fn hardway_win(stake: i64, num: u8) -> i64 {
         _ => stake * 9, // 6 | 8
     }
 }
+/// The payout unit a place bet must be a multiple of, by number. The
+/// adjudicator rounds every requested place stake up to this so payouts
+/// stay whole cents.
+#[inline]
+pub(crate) const fn place_unit_of(num: u8) -> i64 {
+    place_unit(num)
+}
+
 /// Public sizing helper: the actual stake a place bet takes at a table
 /// minimum (rounded up to its payout unit) — the Design screen prices
 /// worst-case exposure with it.

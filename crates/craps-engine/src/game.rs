@@ -5,9 +5,11 @@
 //! rolls against the selected strategy.
 
 use crate::bets::{
-    cheapest_selected_stake, dont_lay_for_win, hard_index, hardway_win, pass_odds_win, place_index,
-    place_stake, place_unit, place_win, BetSelection, ProgState, Rules, HARD_NUMS, PLACE_NUMS,
+    cheapest_selected_stake, hard_index, hardway_win, pass_odds_win, place_index, place_stake,
+    place_unit, place_win, BetSelection, OddsPolicy, ProgState, Rules, HARD_NUMS, PLACE_NUMS,
 };
+use crate::strategy::action::bet_kind;
+use crate::strategy::{Action, Amount, BetRef};
 use crate::trace::{BetEvent, BetEventKind, BetKind, Noop, RollObserver};
 
 pub(crate) struct Session<'a, O: RollObserver = Noop> {
@@ -149,7 +151,7 @@ impl<'a, O: RollObserver> Session<'a, O> {
     }
 
     #[inline(always)]
-    fn emit(&mut self, bet: BetKind, kind: BetEventKind, stake_cents: i64) {
+    pub(crate) fn emit(&mut self, bet: BetKind, kind: BetEventKind, stake_cents: i64) {
         self.obs.event(BetEvent {
             bet,
             kind,
@@ -162,9 +164,19 @@ impl<'a, O: RollObserver> Session<'a, O> {
     /// accept a $33.75 flat bet, and whole-dollar flats keep every true-odds
     /// payout exact in cents (progressions like Half Press otherwise produce
     /// sub-cent-precision stakes).
-    pub(crate) fn prog_stake(&self, st: &ProgState, base: i64) -> i64 {
+    ///
+    /// The stake arrives by value rather than as a `&ProgState` borrow so
+    /// the clip can be emitted from here — this is where the table maximum
+    /// actually bites, and per STRATEGY_DSL.md Principle 4 the truncation
+    /// that stops a Martingale is an event, not a silent flat spot in a
+    /// curve. Stake shaping moves into the adjudicator with the compiled
+    /// progressions (P2); until then it emits from where it happens.
+    pub(crate) fn prog_stake(&mut self, stake: i64, base: i64, bet: BetRef) -> i64 {
         let max = self.table_max.max(base);
-        let raw = st.stake.clamp(base, max);
+        if stake > max {
+            self.emit(bet_kind(bet), BetEventKind::ClippedToMax, max);
+        }
+        let raw = stake.clamp(base, max);
         if raw == base {
             return base;
         }
@@ -172,11 +184,11 @@ impl<'a, O: RollObserver> Session<'a, O> {
     }
 
     /// Same, rounded to the nearest payout unit for place bets.
-    pub(crate) fn prog_place_stake(&self, i: usize) -> i64 {
+    pub(crate) fn prog_place_stake(&mut self, i: usize) -> i64 {
         let num = PLACE_NUMS[i];
         let unit = place_unit(num);
         let base = place_stake(self.min, num);
-        let v = self.prog_stake(&self.p_place[i], base);
+        let v = self.prog_stake(self.p_place[i].stake, base, BetRef::Place(num));
         ((v + unit / 2) / unit).max(1) * unit
     }
 
@@ -263,24 +275,37 @@ impl<'a, O: RollObserver> Session<'a, O> {
         cheapest_selected_stake(self.sel, self.rules, self.min)
     }
 
-    /// Place all bets the strategy calls for at this moment, as affordable.
+    /// The built-in player, expressed as intents.
+    ///
+    /// Every condition in this function is a *strategy* condition: which
+    /// bets this player wants, how many come bets it will carry at once,
+    /// which numbers it places, what its progression asks for. Whether an
+    /// ask is legal right now, affordable, or clipped is the table's
+    /// business, decided once in [`Session::apply`].
+    ///
+    /// This is the first strategy expressed against the intent surface, and
+    /// it must decide exactly what the hand-written version decided, to the
+    /// cent — the pinned outcome vectors and the equivalence battery are the
+    /// proof. Nothing here allocates: intents are adjudicated in sequence,
+    /// never collected.
     pub(crate) fn place_bets(&mut self) {
+        // `multiple()` returns 0 for every point under `OddsPolicy::None`
+        // and nonzero under every other policy, so this single test is
+        // exactly the per-point `mult > 0` guard, hoisted. A player whose
+        // policy allows no odds does not ask for them, rather than being
+        // refused once per roll.
+        let takes_odds = self.sel.take_odds && self.rules.odds_policy != OddsPolicy::None;
+
         match self.point {
             None => {
                 // Come-out: line bets only. Place bets and hardways are "off".
                 if self.sel.pass_line && self.pass == 0 {
-                    let want = self.prog_stake(&self.p_pass, self.min);
-                    if let Some(a) = self.try_stake_or_base(want, self.min) {
-                        self.pass = a;
-                        self.emit(BetKind::Pass, BetEventKind::Placed, a);
-                    }
+                    let want = self.prog_stake(self.p_pass.stake, self.min, BetRef::Pass);
+                    let _ = self.apply(Action::Bet(BetRef::Pass, Amount::Cents(want)));
                 }
                 if self.sel.dont_pass && self.dont == 0 {
-                    let want = self.prog_stake(&self.p_dont, self.min);
-                    if let Some(a) = self.try_stake_or_base(want, self.min) {
-                        self.dont = a;
-                        self.emit(BetKind::DontPass, BetEventKind::Placed, a);
-                    }
+                    let want = self.prog_stake(self.p_dont.stake, self.min, BetRef::DontPass);
+                    let _ = self.apply(Action::Bet(BetRef::DontPass, Amount::Cents(want)));
                 }
             }
             Some(point) => {
@@ -289,122 +314,69 @@ impl<'a, O: RollObserver> Session<'a, O> {
                     && self.come_flat == 0
                     && self.live_come_bets() < self.sel.come_max
                 {
-                    let want = self.prog_stake(&self.p_come, self.min);
-                    if let Some(a) = self.try_stake_or_base(want, self.min) {
-                        self.come_flat = a;
-                        self.emit(BetKind::Come, BetEventKind::Placed, a);
-                    }
+                    let want = self.prog_stake(self.p_come.stake, self.min, BetRef::Come);
+                    let _ = self.apply(Action::Bet(BetRef::Come, Amount::Cents(want)));
                 }
                 if self.sel.dont_come_max > 0
                     && self.dc_flat == 0
                     && self.live_dc_bets() < self.sel.dont_come_max
                 {
-                    let want = self.prog_stake(&self.p_dc, self.min);
-                    if let Some(a) = self.try_stake_or_base(want, self.min) {
-                        self.dc_flat = a;
-                        self.emit(BetKind::DontCome, BetEventKind::Placed, a);
-                    }
+                    let want = self.prog_stake(self.p_dc.stake, self.min, BetRef::DontCome);
+                    let _ = self.apply(Action::Bet(BetRef::DontCome, Amount::Cents(want)));
                 }
                 // Odds behind an established line bet.
-                if self.sel.take_odds {
-                    let mult = self.rules.odds_policy.multiple(point);
-                    if mult > 0 {
-                        if self.pass > 0 && self.pass_odds == 0 {
-                            let stake = self.pass * mult;
-                            if let Some(a) = self.try_stake(stake) {
-                                self.pass_odds = a;
-                                self.pass_odds_point = point;
-                                self.emit(BetKind::PassOdds, BetEventKind::Placed, a);
-                            }
-                        }
-                        if self.dont > 0 && self.dont_lay == 0 {
-                            let win = self.dont * mult;
-                            let stake = dont_lay_for_win(win, point);
-                            if let Some(a) = self.try_stake(stake) {
-                                self.dont_lay = a;
-                                self.dont_lay_win = win;
-                                self.emit(BetKind::DontPassLay, BetEventKind::Placed, a);
-                            }
-                        }
+                if takes_odds {
+                    if self.pass > 0 && self.pass_odds == 0 {
+                        let _ = self.apply(Action::Bet(BetRef::PassOdds, Amount::MaxOdds));
+                    }
+                    if self.dont > 0 && self.dont_lay == 0 {
+                        let _ = self.apply(Action::Bet(BetRef::DontPassLay, Amount::MaxOdds));
                     }
                 }
                 // Place bets on selected numbers other than the current point.
                 for (i, &num) in PLACE_NUMS.iter().enumerate() {
                     if self.sel.place[i] && num != point && self.place[i] == 0 {
                         let want = self.prog_place_stake(i);
-                        let base = place_stake(self.min, num);
-                        if let Some(a) = self.try_stake_or_base(want, base) {
-                            self.place[i] = a;
-                            self.emit(BetKind::Place(num), BetEventKind::Placed, a);
-                        }
+                        let _ = self.apply(Action::Bet(BetRef::Place(num), Amount::Cents(want)));
                     }
                 }
                 // Hardways.
                 for (i, &num) in HARD_NUMS.iter().enumerate() {
                     if self.sel.hardways[i] && self.hard[i] == 0 {
                         let base = self.rules.prop_bet_cents;
-                        let want = self.prog_stake(&self.p_hard[i], base);
-                        if let Some(a) = self.try_stake_or_base(want, base) {
-                            self.hard[i] = a;
-                            self.emit(BetKind::Hardway(num), BetEventKind::Placed, a);
-                        }
+                        let want =
+                            self.prog_stake(self.p_hard[i].stake, base, BetRef::Hardway(num));
+                        let _ = self.apply(Action::Bet(BetRef::Hardway(num), Amount::Cents(want)));
                     }
                 }
             }
         }
         // Odds behind established come / don't come points can be taken (or
         // topped up after a new flat stacks on) at any time.
-        if self.sel.take_odds {
+        if takes_odds {
             for (i, &num) in PLACE_NUMS.iter().enumerate() {
-                let mult = self.rules.odds_policy.multiple(num);
-                if mult == 0 {
-                    continue;
-                }
                 if self.come_points[i] > 0 {
-                    let want = self.come_points[i] * mult;
-                    if self.come_odds[i] < want {
-                        if let Some(a) = self.try_stake(want - self.come_odds[i]) {
-                            self.come_odds[i] += a;
-                            self.emit(BetKind::ComeOdds(num), BetEventKind::Placed, a);
-                        }
-                    }
+                    let _ = self.apply(Action::Bet(BetRef::ComeOdds(num), Amount::MaxOdds));
                 }
                 if self.dc_points[i] > 0 {
-                    let want_win = self.dc_points[i] * mult;
-                    if self.dc_lay_win[i] < want_win {
-                        let stake = dont_lay_for_win(want_win - self.dc_lay_win[i], num);
-                        if let Some(a) = self.try_stake(stake) {
-                            self.dc_lay[i] += a;
-                            self.dc_lay_win[i] += want_win - self.dc_lay_win[i];
-                            self.emit(BetKind::DontComeLay(num), BetEventKind::Placed, a);
-                        }
-                    }
+                    let _ = self.apply(Action::Bet(BetRef::DontComeLay(num), Amount::MaxOdds));
                 }
             }
         }
         // One-roll bets, working on every roll.
         if self.sel.field && self.field_bet == 0 {
-            let want = self.prog_stake(&self.p_field, self.min);
-            if let Some(a) = self.try_stake_or_base(want, self.min) {
-                self.field_bet = a;
-                self.emit(BetKind::Field, BetEventKind::Placed, a);
-            }
+            let want = self.prog_stake(self.p_field.stake, self.min, BetRef::Field);
+            let _ = self.apply(Action::Bet(BetRef::Field, Amount::Cents(want)));
         }
         if self.sel.any_seven && self.any7_bet == 0 {
             let base = self.rules.prop_bet_cents;
-            let want = self.prog_stake(&self.p_any7, base);
-            if let Some(a) = self.try_stake_or_base(want, base) {
-                self.any7_bet = a;
-                self.emit(BetKind::AnySeven, BetEventKind::Placed, a);
-            }
+            let want = self.prog_stake(self.p_any7.stake, base, BetRef::AnySeven);
+            let _ = self.apply(Action::Bet(BetRef::AnySeven, Amount::Cents(want)));
         }
         if self.sel.any_craps && self.anycraps_bet == 0 {
             let base = self.rules.prop_bet_cents;
-            let want = self.prog_stake(&self.p_anycraps, base);
-            if let Some(a) = self.try_stake_or_base(want, base) {
-                self.anycraps_bet = a;
-                self.emit(BetKind::AnyCraps, BetEventKind::Placed, a);
-            }
+            let want = self.prog_stake(self.p_anycraps.stake, base, BetRef::AnyCraps);
+            let _ = self.apply(Action::Bet(BetRef::AnyCraps, Amount::Cents(want)));
         }
         // Placement is a pure function of cash, bets, and the point; until a
         // resolution changes one of those, running it again is a no-op.
@@ -841,7 +813,8 @@ impl<'a, O: RollObserver> Session<'a, O> {
                                 BetEventKind::Won { paid_cents: paid },
                                 cur,
                             );
-                            let desired = self.prog_stake(&self.p_hard[i], base);
+                            let desired =
+                                self.prog_stake(self.p_hard[i].stake, base, BetRef::Hardway(t));
                             if desired > cur {
                                 if self.try_stake(desired - cur).is_some() {
                                     self.hard[i] = desired;

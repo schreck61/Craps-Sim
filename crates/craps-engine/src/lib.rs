@@ -14,6 +14,7 @@ mod edge;
 mod game;
 mod session;
 mod stats;
+pub mod strategy;
 mod summary;
 mod sweep;
 pub mod trace;
@@ -23,6 +24,7 @@ pub use edge::*;
 pub use rng::Xoshiro256pp;
 pub use session::*;
 pub use stats::*;
+pub use strategy::{Action, Amount, BetRef, RejectReason};
 pub use summary::*;
 pub use sweep::*;
 

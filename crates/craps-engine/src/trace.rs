@@ -14,6 +14,7 @@
 
 use crate::bets::{BetSelection, Rules};
 use crate::session::{run_session_impl, SessionOutcomes};
+use crate::strategy::RejectReason;
 
 /// Which bet an event concerns. Numbers ride along where a bet lives on a
 /// box number.
@@ -57,6 +58,16 @@ pub enum BetEventKind {
     TakenDown,
     /// A come/don't come flat traveled to a box number.
     Traveled { to: u8 },
+    /// The table refused the strategy's request. `stake_cents` is 0 — no
+    /// money moved. A strategy that quietly does nothing is the worst
+    /// outcome the intent surface could allow, so every refusal is an
+    /// event (STRATEGY_DSL.md Principle 4).
+    Rejected { reason: RejectReason },
+    /// The requested stake exceeded the table maximum and was truncated to
+    /// it; `stake_cents` is the amount actually bet. This is how a real
+    /// table stops a Martingale, and it is shown rather than inferred from
+    /// a flat spot in a curve.
+    ClippedToMax,
 }
 
 /// One thing that happened to one bet, to the cent.
