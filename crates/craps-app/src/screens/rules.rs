@@ -461,7 +461,7 @@ fn rule_row(
         ui.label(word(t, "When"));
         changed |= trigger_slot(ui, &mut rule.trigger);
     });
-    changed |= guard_slots(ui, t, rule);
+    changed |= guard_slots(ui, t, rule, vars);
     ui.add_space(2.0);
     let mut drop: Option<usize> = None;
     let count = rule.body.len();
@@ -576,7 +576,12 @@ fn trigger_label(t: Trigger) -> String {
 }
 
 /// The condition, as clauses joined by "and".
-fn guard_slots(ui: &mut egui::Ui, t: &crate::ui::theme::Theme, rule: &mut Rule) -> bool {
+fn guard_slots(
+    ui: &mut egui::Ui,
+    t: &crate::ui::theme::Theme,
+    rule: &mut Rule,
+    vars: &[String],
+) -> bool {
     let mut changed = false;
     // No condition at all is an empty list — something to add to. Only a
     // condition these slots cannot take apart is one they decline to own.
@@ -594,7 +599,12 @@ fn guard_slots(ui: &mut egui::Ui, t: &crate::ui::theme::Theme, rule: &mut Rule) 
             ui.horizontal_wrapped(|ui| {
                 ui.label(word(t, "and"));
                 ui.label(
-                    RichText::new(guard_text(g, &[]))
+                    // The strategy's memory has to be in scope to write this
+                    // out. Passing an empty list here rendered every slot by
+                    // its index — a condition on `streak` came back as
+                    // `var0 >= 2`, naming a thing that appears nowhere in the
+                    // strategy and asking the reader to count declarations.
+                    RichText::new(guard_text(g, vars))
                         .font(FontId::new(type_scale::BODY, theme::mono()))
                         .color(t.ink),
                 );
@@ -985,6 +995,33 @@ mod tests {
 
     fn strategy(src: &str) -> Strategy {
         parse(src).unwrap_or_else(|e| panic!("{}", e.message()))
+    }
+
+    /// A condition the slots cannot take apart is still shown, and showing it
+    /// means naming the memory it reads.
+    ///
+    /// The shipped "The field is due" example reads `streak >= 2`, and its
+    /// `or` puts it outside the clause shapes — so the editor falls back to
+    /// rendering the expression. That fallback was handed an empty variable
+    /// list and wrote `var0 >= 2`, naming a thing that appears nowhere in the
+    /// strategy and asking the reader to count declarations to work out which
+    /// slot was meant.
+    #[test]
+    fn a_condition_shown_as_text_names_its_memory() {
+        let s = strategy(
+            "strategy \"f\" language 1\n\
+             var streak = 0\n\
+             on roll when streak >= 2 or point == 6:\n    bet field\n",
+        );
+        let shown = guard_text(s.rules[0].guard.as_ref().unwrap(), &s.vars);
+        assert_eq!(shown, "streak >= 2 or point == 6");
+        assert!(
+            !shown.contains("var0"),
+            "the slot index leaked instead of its name: {shown}"
+        );
+        // And with no memory in scope there is nothing to name, which is the
+        // only case the index form was ever right for.
+        assert!(guard_text(s.rules[0].guard.as_ref().unwrap(), &[]).contains("var0"));
     }
 
     /// The clause model is the editor's claim about what it can take apart.
