@@ -1,22 +1,27 @@
 // Copyright (c) 2026 Jim Schreckengast
 // SPDX-License-Identifier: MIT
 
-//! The Bench: one session, stepped, with every decision attributed.
+//! Authoring a strategy, and reading one back.
 //!
-//! `STRATEGY_DSL.md` §8 calls this the feature that decides whether the
-//! language is usable, and not optional. A rule set that quietly does
-//! nothing and returns a confident distribution is the worst thing the
-//! strategy surface can produce; this is where that becomes impossible to
-//! miss. Rules that fired are lit. Rules that never fired carry a zero.
-//! Every refusal says why, in words.
+//! This module holds two halves that live on two screens, because a design
+//! review found them wanting different things:
 //!
-//! It shows one seed, not a distribution — deliberately. The Findings
-//! screens are where a million nights live; this is where one night is
-//! read line by line.
+//! - [`authoring`] is on **Design**, behind the `Checkboxes | Rules`
+//!   control, because Design is where the player is built and choosing to
+//!   play a strategy is the same act as choosing to write one.
+//! - [`ledger`] is on **Replay**, because Replay already owns a transport,
+//!   a dice strip, a keyboard, and the population envelope. `STRATEGY_DSL`
+//!   §8 always said the Bench should reuse them; the first version
+//!   reimplemented a worse transport instead.
+//!
+//! What the ledger is for: a rule set that quietly does nothing and returns
+//! a confident distribution is the worst thing the strategy surface can
+//! produce. Rules that fired are marked. Rules that never fired carry a
+//! zero. Every refusal says why, in words, and the session's refusals are
+//! listed together so one on roll 91 is not something you have to find.
 
 use craps_engine::strategy::{
-    bench_session, compile, from_selection, parse, render, render_rule, BenchTrace, Program,
-    Strategy,
+    compile, from_selection, parse, render, render_rule, BenchTrace, Program, Strategy,
 };
 use egui::{FontId, RichText, Stroke};
 
@@ -24,20 +29,17 @@ use crate::app::App;
 use crate::ui::numerals;
 use crate::ui::theme::{self, type_scale};
 
+#[derive(Default)]
 pub struct BenchState {
     /// The strategy under test, as text. Starts empty; the button fills it
     /// from whatever the bet rail is currently describing, which is also
     /// the fastest way to see what the language looks like.
     pub source: String,
-    pub seed_text: String,
     pub parsed: Option<Strategy>,
     pub program: Option<Program>,
     /// Why the source could not be read or compiled, in the words the
     /// author needs — never a red outline alone.
     pub error: Option<String>,
-    pub trace: Option<BenchTrace>,
-    /// Playhead in rolls; 0 is the table before the first throw.
-    pub position: usize,
     /// The name this strategy is saved under, and the text it had when it
     /// was last written or read. Together they answer "is there unsaved
     /// work here", which is the only thing standing between a user and
@@ -49,39 +51,12 @@ pub struct BenchState {
     pub library_loaded: bool,
     /// The last thing the library did, in words.
     pub library_note: Option<String>,
-    /// Whether the panel starts expanded. It does not, because the Design
-    /// screen belongs to the bet rail; the Bench is for when something is
-    /// not doing what its author expected.
-    pub open: bool,
-}
-
-impl Default for BenchState {
-    fn default() -> Self {
-        Self {
-            source: String::new(),
-            seed_text: "1".into(),
-            parsed: None,
-            program: None,
-            error: None,
-            trace: None,
-            position: 0,
-            save_name: String::new(),
-            saved_source: None,
-            library: Vec::new(),
-            library_loaded: false,
-            library_note: None,
-            open: false,
-        }
-    }
 }
 
 impl BenchState {
     /// Read and compile the source, keeping whichever of the two failed as
-    /// the message. Clears any trace: a ledger from a strategy that no
-    /// longer exists is the kind of stale truth this app refuses.
+    /// the message.
     pub fn build(&mut self) {
-        self.trace = None;
-        self.position = 0;
         self.parsed = None;
         self.program = None;
         if self.source.trim().is_empty() {
@@ -103,16 +78,6 @@ impl BenchState {
                 }
             },
         }
-    }
-
-    pub fn step(&mut self, dir: i64) {
-        let max = self.trace.as_ref().map_or(0, |t| t.rolls.len());
-        let next = self.position as i64 + dir;
-        self.position = next.clamp(0, max as i64) as usize;
-    }
-
-    fn seed(&self) -> u64 {
-        self.seed_text.trim().parse().unwrap_or(1)
     }
 
     /// Whether the editor holds work that is not on disk.
@@ -167,46 +132,27 @@ impl BenchState {
     }
 }
 
-pub fn show(app: &mut App, ui: &mut egui::Ui) {
+/// The authoring half, on the Design screen.
+pub fn authoring(app: &mut App, ui: &mut egui::Ui) {
     let t = app.theme.clone();
-    let heading = RichText::new("The Bench")
-        .font(FontId::new(type_scale::SECTION, theme::sans()))
-        .color(t.ink);
-    let resp = egui::CollapsingHeader::new(heading)
-        .id_salt("bench_panel")
-        .default_open(app.bench.open);
-    resp.show(ui, |ui| {
-        ui.label(
-            RichText::new(
-                "One session, stepped. Which rules fired, what each asked for, \
-                 and what the table did about it.",
-            )
-            .font(FontId::new(type_scale::CAPTION, theme::sans()))
-            .color(t.ink2),
-        );
-        ui.add_space(6.0);
-        source_box(app, ui);
-        ui.add_space(6.0);
-        library_row(app, ui);
-        ui.add_space(6.0);
-        controls(app, ui);
-        ui.add_space(6.0);
-        status(app, ui);
-        if app.bench.trace.is_some() {
-            ui.add_space(8.0);
-            transport(app, ui);
-            ui.add_space(8.0);
-            ui.columns(2, |cols| {
-                rules_column(app, &mut cols[0]);
-                ledger_column(app, &mut cols[1]);
-            });
-        }
-    });
+    ui.label(
+        RichText::new(
+            "Write a strategy. It plays instead of the bet rail, and Replay \
+             steps through a night of it rule by rule.",
+        )
+        .font(FontId::new(type_scale::BODY, theme::sans()))
+        .color(t.ink2),
+    );
+    ui.add_space(6.0);
+    library_row(app, ui);
+    ui.add_space(6.0);
+    source_box(app, ui);
+    ui.add_space(6.0);
+    controls(app, ui);
+    ui.add_space(6.0);
+    status(app, ui);
 }
 
-/// Save, load, and delete. A strategy the user wrote and cannot get back is
-/// worse than one they never wrote, so this row exists before the editor
-/// does.
 fn library_row(app: &mut App, ui: &mut egui::Ui) {
     let t = app.theme.clone();
     if !app.bench.library_loaded {
@@ -319,7 +265,6 @@ fn source_box(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn controls(app: &mut App, ui: &mut egui::Ui) {
-    let t = app.theme.clone();
     ui.horizontal(|ui| {
         if ui
             .button("Take the current player")
@@ -328,71 +273,62 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
         {
             let s = from_selection(&app.cfg.sel, &app.cfg.rules());
             app.bench.source = render(&s);
+            app.bench.save_name.clear();
+            app.bench.saved_source = None;
             app.bench.build();
         }
         if ui.button("Compile").clicked() {
             app.bench.build();
         }
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new("seed")
-                .font(FontId::new(type_scale::CAPTION, theme::sans()))
-                .color(t.ink2),
-        );
-        ui.add(
-            egui::TextEdit::singleline(&mut app.bench.seed_text)
-                .desired_width(70.0)
-                .font(FontId::new(type_scale::CAPTION, theme::mono())),
-        );
-        let ready = app.bench.program.is_some();
         if ui
-            .add_enabled(ready, egui::Button::new("Run one session"))
+            .button("Examples…")
+            .on_hover_text("Strategies from the specification, ready to edit")
             .clicked()
         {
-            run(app);
+            let id = egui::Id::new("bench_examples");
+            let open: bool = ui.ctx().data(|d| d.get_temp(id).unwrap_or(false));
+            ui.ctx().data_mut(|d| d.insert_temp(id, !open));
         }
     });
-    ui.horizontal(|ui| {
-        let ready = app.bench.program.is_some();
-        ui.add_enabled(
-            ready,
-            egui::Checkbox::new(&mut app.use_strategy, "Play this instead of the bet rail"),
-        )
-        .on_hover_text("Space, and every Findings number, will come from this strategy");
-        if app.use_strategy && !ready {
-            // Selected but not compiled: say so here rather than let Run
-            // fail with a message far from the control that caused it.
-            ui.label(
-                RichText::new("— compile it first")
-                    .font(FontId::new(type_scale::CAPTION, theme::sans()))
-                    .color(t.ink),
-            );
-        }
-    });
+    examples_menu(app, ui);
 }
 
-fn run(app: &mut App) {
-    let Some(p) = app.bench.program.clone() else {
+/// The worked examples, shipped rather than left in the test suite.
+///
+/// These are demonstrations of syntax, not recommendations of play — the
+/// app names no best strategy and these are mostly bad bets, one of them
+/// deliberately superstitious. But a language with no examples and no
+/// reference is a language nobody can start writing in.
+fn examples_menu(app: &mut App, ui: &mut egui::Ui) {
+    let t = app.theme.clone();
+    let id = egui::Id::new("bench_examples");
+    if !ui.ctx().data(|d| d.get_temp::<bool>(id).unwrap_or(false)) {
         return;
-    };
-    let min = app.cfg.table_mins_cents.first().copied().unwrap_or(1000);
-    let trace = bench_session(
-        &p,
-        &app.cfg.rules(),
-        min,
-        app.cfg.budget_cents,
-        app.cfg.quit_target_cents(),
-        app.cfg.max_rolls,
-        app.cfg.horizon_rolls(),
-        app.bench.seed(),
-    );
-    // Open on the first roll: the table before the first throw is a
-    // legitimate position to step back to, but not one to start from.
-    app.bench.position = 1.min(trace.rolls.len());
-    app.bench.trace = Some(trace);
+    }
+    egui::Frame::NONE
+        .fill(t.surface2)
+        .stroke(Stroke::new(1.0, t.hairline_strong))
+        .corner_radius(6)
+        .inner_margin(8.0)
+        .show(ui, |ui| {
+            for (name, src) in craps_engine::strategy::EXAMPLES {
+                if ui.selectable_label(false, *name).clicked() {
+                    app.bench.source = (*src).to_owned();
+                    app.bench.save_name.clear();
+                    app.bench.saved_source = None;
+                    app.bench.build();
+                    ui.ctx().data_mut(|d| d.insert_temp(id, false));
+                }
+            }
+            ui.label(
+                RichText::new("Examples of the language, not advice.")
+                    .font(FontId::new(type_scale::CAPTION, theme::sans()))
+                    .color(t.ink2),
+            );
+        });
 }
 
-fn status(app: &mut App, ui: &mut egui::Ui) {
+fn status(app: &App, ui: &mut egui::Ui) {
     let t = app.theme.clone();
     if let Some(e) = &app.bench.error {
         ui.label(
@@ -405,101 +341,169 @@ fn status(app: &mut App, ui: &mut egui::Ui) {
     let Some(p) = &app.bench.program else {
         return;
     };
+    // Instructions per decision belonged in an engine disclosure, not in
+    // front of someone who opened this on a Saturday; and `{:?}` of a
+    // feature mask is a debug format leaking onto their screen.
     let rules = p.rule_count();
-    let reads = if p.features.is_empty() {
-        "reads nothing beyond the layout".to_owned()
-    } else {
-        format!("reads {:?}", p.features)
-    };
+    let reads = read_summary(p);
     ui.label(
         RichText::new(format!(
-            "{rules} rules · {} instructions per decision · {reads}",
-            p.cost_bound()
+            "{rules} rule{} · {reads}",
+            if rules == 1 { "" } else { "s" }
+        ))
+        .font(FontId::new(type_scale::BODY, theme::sans()))
+        .color(t.ink2),
+    );
+}
+
+/// The ledger half, on the Replay screen. `position` is Replay's playhead.
+pub fn ledger(app: &mut App, ui: &mut egui::Ui, position: usize) {
+    let Some(trace) = app.replay.bench.clone() else {
+        return;
+    };
+    ui.add_space(8.0);
+    run_conditions(app, ui, &trace);
+    ui.add_space(6.0);
+    refusal_index(app, ui, &trace, position);
+    ui.add_space(6.0);
+    ui.columns(2, |cols| {
+        rules_column(app, &mut cols[0], &trace, position);
+        events_column(app, &mut cols[1], &trace, position);
+    });
+}
+
+/// What this night was played under. Refusals like "below the table
+/// minimum" are decided entirely by numbers the panel used to leave unsaid.
+fn run_conditions(app: &App, ui: &mut egui::Ui, trace: &BenchTrace) {
+    let t = app.theme.clone();
+    let cfg = app.replay.config.clone().unwrap_or_else(|| app.cfg.clone());
+    let min = app.replay.min_cents;
+    let name = app
+        .bench
+        .program
+        .as_ref()
+        .map(|p| format!("{} #{:04x}", p.name, p.hash & 0xffff))
+        .unwrap_or_else(|| "strategy".into());
+    ui.label(
+        RichText::new(format!(
+            "{name} · {} table · budget {} · {} · ended: {}",
+            numerals::money_text(min, false),
+            numerals::money_text(cfg.budget_cents, false),
+            match cfg.quit_mult {
+                Some(m) => format!("quit at {}×", numerals::multiple(m)),
+                None => "no quit rule".to_owned(),
+            },
+            trace.ending(),
         ))
         .font(FontId::new(type_scale::CAPTION, theme::mono()))
         .color(t.ink2),
     );
 }
 
-fn transport(app: &mut App, ui: &mut egui::Ui) {
+/// Every refusal in the session, together, each one a way to get to it.
+///
+/// Without this a refusal on roll 91 of 137 is invisible unless you step
+/// there — the panel would be telling you an answer exists without giving
+/// you any way to reach it.
+fn refusal_index(app: &mut App, ui: &mut egui::Ui, trace: &BenchTrace, position: usize) {
     let t = app.theme.clone();
-    let total = app.bench.trace.as_ref().map_or(0, |x| x.rolls.len());
-    ui.horizontal(|ui| {
-        if ui.button("◀").on_hover_text("previous roll").clicked() {
-            app.bench.step(-1);
-        }
-        if ui.button("▶").on_hover_text("next roll").clicked() {
-            app.bench.step(1);
-        }
-        let mut pos = app.bench.position;
-        ui.spacing_mut().slider_width = 260.0;
-        ui.add(egui::Slider::new(&mut pos, 0..=total).show_value(false));
-        if pos != app.bench.position {
-            app.bench.position = pos;
-        }
+    let refusals = trace.refusals();
+    if refusals.is_empty() {
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
         ui.label(
-            RichText::new(if app.bench.position == 0 {
-                "before the first roll".to_owned()
-            } else {
-                format!("roll {} of {total}", app.bench.position)
-            })
-            .font(FontId::new(type_scale::CAPTION, theme::mono()))
-            .color(t.ink2),
+            RichText::new(format!(
+                "{} refusal{} this night:",
+                refusals.len(),
+                if refusals.len() == 1 { "" } else { "s" }
+            ))
+            .font(FontId::new(type_scale::CAPTION, theme::sans()))
+            .color(t.ink),
         );
+        for (roll, e) in refusals.iter().take(12) {
+            let here = *roll as usize == position;
+            let label = format!("{} · {}", roll, e.event.bet.label());
+            if ui
+                .selectable_label(
+                    here,
+                    RichText::new(label).font(FontId::new(type_scale::CAPTION, theme::mono())),
+                )
+                .on_hover_text(match e.event.kind {
+                    craps_engine::trace::BetEventKind::Rejected { reason } => reason.label(),
+                    _ => "",
+                })
+                .clicked()
+            {
+                app.replay.position = *roll as f64;
+                app.replay.playing = false;
+            }
+        }
+        if refusals.len() > 12 {
+            ui.label(
+                RichText::new(format!("and {} more", refusals.len() - 12))
+                    .font(FontId::new(type_scale::CAPTION, theme::sans()))
+                    .color(t.ink2),
+            );
+        }
     });
 }
 
-fn rules_column(app: &mut App, ui: &mut egui::Ui) {
+fn rules_column(app: &App, ui: &mut egui::Ui, trace: &BenchTrace, position: usize) {
     let t = app.theme.clone();
-    let (Some(strategy), Some(trace)) = (&app.bench.parsed, &app.bench.trace) else {
+    let Some(strategy) = app.bench.parsed.as_ref() else {
         return;
     };
-    let fired: Vec<u16> = if app.bench.position == 0 {
+    let fired: Vec<u16> = if position == 0 {
         Vec::new()
     } else {
         trace
             .rolls
-            .get(app.bench.position - 1)
+            .get(position - 1)
             .map(|r| r.fired.clone())
             .unwrap_or_default()
     };
     ui.label(
         RichText::new("Rules")
-            .font(FontId::new(type_scale::CAPTION, theme::sans()))
-            .color(t.ink2),
+            .font(FontId::new(type_scale::SECTION, theme::sans_semibold()))
+            .color(t.ink),
     );
     ui.add_space(4.0);
     for i in 0..strategy.rules.len() {
         let count = trace.fire_counts.get(i).copied().unwrap_or(0);
         let lit = fired.contains(&(i as u16));
-        // A rule that never fires in the whole session is the first thing
-        // to look at, so it is marked amber — the register this app
-        // reserves for "trust this less than you were about to".
-        let ink = if lit {
-            t.blue
-        } else if count == 0 {
-            t.amber
-        } else {
-            t.ink
-        };
-        ui.horizontal(|ui| {
-            // The ledger attributes money to "rule 3"; without the number
-            // here that is a reference to nothing.
-            ui.label(
-                RichText::new(format!("{i:>2}"))
-                    .font(FontId::new(type_scale::CAPTION, theme::mono()))
-                    .color(t.ink2),
-            );
-            ui.label(
-                RichText::new(format!("{count:>4}×"))
-                    .font(FontId::new(type_scale::CAPTION, theme::mono()))
-                    .color(if count == 0 { t.amber } else { t.ink2 }),
-            );
-            ui.label(
-                RichText::new(render_rule(strategy, i))
-                    .font(FontId::new(type_scale::CAPTION, theme::mono()))
-                    .color(ink),
-            );
+        // Emphasis without colour: a rule that fired on this roll is raised
+        // onto the next surface, which is this product's own elevation
+        // channel. A rule that never fired is demoted to secondary ink and
+        // carries a 0 — the count is the doubled non-colour channel, so the
+        // reading does not depend on seeing a shade at all.
+        let ink = if count == 0 { t.ink2 } else { t.ink };
+        let row = egui::Frame::NONE
+            .fill(if lit {
+                t.surface2
+            } else {
+                egui::Color32::TRANSPARENT
+            })
+            .inner_margin(egui::Margin::symmetric(4, 1))
+            .corner_radius(3);
+        row.show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!("{i:>2}"))
+                        .font(FontId::new(type_scale::CAPTION, theme::mono()))
+                        .color(t.ink2),
+                );
+                ui.label(
+                    RichText::new(format!("{count:>4}×"))
+                        .font(FontId::new(type_scale::CAPTION, theme::mono()))
+                        .color(t.ink2),
+                );
+                ui.label(
+                    RichText::new(render_rule(strategy, i))
+                        .font(FontId::new(type_scale::BODY, theme::mono()))
+                        .color(ink),
+                );
+            });
         });
     }
     let dead = trace.never_fired();
@@ -507,53 +511,41 @@ fn rules_column(app: &mut App, ui: &mut egui::Ui) {
         ui.add_space(4.0);
         ui.label(
             RichText::new(format!(
-                "{} rule{} never fired on this seed.",
+                "{} rule{} never fired on this night.",
                 dead.len(),
                 if dead.len() == 1 { "" } else { "s" }
             ))
-            .font(FontId::new(type_scale::CAPTION, theme::sans()))
-            .color(t.amber),
+            .font(FontId::new(type_scale::BODY, theme::sans()))
+            .color(t.ink),
         );
     }
 }
 
-fn ledger_column(app: &mut App, ui: &mut egui::Ui) {
+fn events_column(app: &App, ui: &mut egui::Ui, trace: &BenchTrace, position: usize) {
     let t = app.theme.clone();
-    let Some(trace) = &app.bench.trace else {
-        return;
-    };
     ui.label(
         RichText::new("What happened")
-            .font(FontId::new(type_scale::CAPTION, theme::sans()))
-            .color(t.ink2),
+            .font(FontId::new(type_scale::SECTION, theme::sans_semibold()))
+            .color(t.ink),
     );
     ui.add_space(4.0);
-    if app.bench.position == 0 {
+    if position == 0 {
         ui.label(
             RichText::new("The table before the first throw.")
-                .font(FontId::new(type_scale::CAPTION, theme::sans()))
+                .font(FontId::new(type_scale::BODY, theme::sans()))
                 .color(t.ink2),
         );
         return;
     }
-    let Some(roll) = trace.rolls.get(app.bench.position - 1) else {
+    let Some(roll) = trace.rolls.get(position - 1) else {
         return;
     };
-    let budget = app.cfg.budget_cents;
-    ui.label(
-        RichText::new(format!(
-            "{}+{} = {}   ·   {}",
-            roll.dice.0,
-            roll.dice.1,
-            roll.dice.0 + roll.dice.1,
-            match roll.point_after {
-                Some(p) => format!("point {p}"),
-                None => "come-out".to_owned(),
-            }
-        ))
-        .font(FontId::new(type_scale::BODY, theme::mono()))
-        .color(t.ink),
-    );
+    let budget = app
+        .replay
+        .config
+        .as_ref()
+        .map(|c| c.budget_cents)
+        .unwrap_or(app.cfg.budget_cents);
     let profit = roll.wealth_after - budget;
     ui.label(
         RichText::new(format!(
@@ -563,14 +555,14 @@ fn ledger_column(app: &mut App, ui: &mut egui::Ui) {
             if profit >= 0 { "up " } else { "down " },
             numerals::money_text(profit.abs(), false)
         ))
-        .font(FontId::new(type_scale::CAPTION, theme::mono()))
-        .color(if profit >= 0 { t.gain } else { t.ruin }),
+        .font(FontId::new(type_scale::BODY, theme::mono()))
+        .color(t.ink),
     );
     ui.add_space(4.0);
     if roll.events.is_empty() {
         ui.label(
             RichText::new("Nothing moved.")
-                .font(FontId::new(type_scale::CAPTION, theme::sans()))
+                .font(FontId::new(type_scale::BODY, theme::sans()))
                 .color(t.ink2),
         );
     }
@@ -579,18 +571,41 @@ fn ledger_column(app: &mut App, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new(match e.rule {
-                    Some(i) => format!("rule {i}"),
-                    None => "table".to_owned(),
+                    Some(i) => format!("rule {i:>2}"),
+                    None => "  table".to_owned(),
                 })
                 .font(FontId::new(type_scale::CAPTION, theme::mono()))
                 .color(t.ink2),
             );
             ui.label(
                 RichText::new(words)
-                    .font(FontId::new(type_scale::CAPTION, theme::mono()))
+                    .font(FontId::new(type_scale::BODY, theme::mono()))
                     .color(ink),
             );
         });
+    }
+}
+
+/// What history a strategy reads, in words rather than a debug print.
+fn read_summary(p: &Program) -> String {
+    use craps_engine::strategy::FeatureMask as F;
+    let mut parts: Vec<&str> = Vec::new();
+    if p.features.has(F::DICE) {
+        parts.push("the dice so far");
+    }
+    if p.features.has(F::HITS) {
+        parts.push("how often each number has come");
+    }
+    if p.features.has(F::STREAKS) {
+        parts.push("wins and losses per bet");
+    }
+    if p.features.has(F::PEAK) {
+        parts.push("the high-water mark");
+    }
+    if parts.is_empty() {
+        "reads only the table in front of it".to_owned()
+    } else {
+        format!("reads {}", parts.join(", "))
     }
 }
 
@@ -679,91 +694,5 @@ mod tests {
             "{:?}",
             b.error
         );
-    }
-
-    #[test]
-    fn stepping_stays_inside_the_session() {
-        let cfg = SimConfig::default();
-        let mut b = taken_from(&cfg);
-        let p = b.program.clone().unwrap();
-        b.trace = Some(bench_session(
-            &p,
-            &cfg.rules(),
-            1000,
-            cfg.budget_cents,
-            None,
-            cfg.max_rolls,
-            200,
-            1,
-        ));
-        let total = b.trace.as_ref().unwrap().rolls.len();
-        assert!(total > 0);
-        b.position = 0;
-        b.step(-1);
-        assert_eq!(b.position, 0, "cannot step before the table existed");
-        b.position = total;
-        b.step(1);
-        assert_eq!(b.position, total, "cannot step past the last roll");
-        b.step(-1);
-        assert_eq!(b.position, total - 1);
-    }
-
-    #[test]
-    fn unsaved_work_is_visible_and_saving_settles_it() {
-        let dir = std::env::temp_dir().join("craps-bench-dirty-test");
-        let _ = std::fs::remove_dir_all(&dir);
-        let src = "strategy \"Mine\" language 1\non come-out:\n    bet pass\n";
-
-        let mut b = from_source(src.into());
-        assert!(b.dirty(), "typed but never saved");
-
-        // Saving through the store settles it; editing dirties it again.
-        crate::store_strategies::save(&dir, "Mine", &b.source).unwrap();
-        b.saved_source = Some(b.source.clone());
-        assert!(!b.dirty());
-        b.source.push_str("\non seven-out:\n    leave\n");
-        assert!(b.dirty(), "edited after saving");
-
-        // Reading it back settles it and restores the name.
-        let entry = crate::store_strategies::list(&dir)
-            .into_iter()
-            .next()
-            .unwrap();
-        b.load_from(&entry);
-        assert!(!b.dirty());
-        assert_eq!(b.save_name, "Mine");
-        assert_eq!(b.source, src);
-        assert!(b.program.is_some(), "loading compiles what it read");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn an_empty_editor_is_not_unsaved_work() {
-        let b = BenchState::default();
-        assert!(!b.dirty(), "nothing typed is nothing to lose");
-    }
-
-    /// Editing the source retires the ledger. A trace from a strategy that
-    /// no longer exists is exactly the stale truth this app refuses
-    /// everywhere else.
-    #[test]
-    fn rebuilding_clears_a_stale_ledger() {
-        let cfg = SimConfig::default();
-        let mut b = taken_from(&cfg);
-        let p = b.program.clone().unwrap();
-        b.trace = Some(bench_session(
-            &p,
-            &cfg.rules(),
-            1000,
-            cfg.budget_cents,
-            None,
-            cfg.max_rolls,
-            200,
-            1,
-        ));
-        b.position = 5;
-        b.build();
-        assert!(b.trace.is_none());
-        assert_eq!(b.position, 0);
     }
 }

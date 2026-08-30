@@ -22,6 +22,10 @@ const SPEEDS: [f64; 4] = [1.0, 10.0, 60.0, 512.0];
 
 pub struct ReplayState {
     pub trace: Option<SessionTrace>,
+    /// The same night with its rules attributed, when a strategy played it.
+    /// Everything else on this screen reads `trace`; only the Bench panel
+    /// reads this.
+    pub bench: Option<craps_engine::strategy::BenchTrace>,
     pub ghost_trace: Option<SessionTrace>,
     pub session: u64,
     pub min_index: usize,
@@ -47,6 +51,7 @@ impl Default for ReplayState {
     fn default() -> Self {
         Self {
             trace: None,
+            bench: None,
             ghost_trace: None,
             session: 0,
             min_index: 0,
@@ -100,12 +105,18 @@ impl ReplayState {
 
     /// Load a session: exact re-simulation from provenance (Main phase),
     /// the same dice the sweep played.
-    pub fn load(
+    /// Load a night, played by `program` when a strategy is live.
+    ///
+    /// A strategy night is benched rather than merely traced, so the rules
+    /// that produced it can be read beside it — which is the whole reason
+    /// this screen is where the Bench belongs.
+    pub fn load_with(
         &mut self,
         live_cfg: &SimConfig,
         run: Option<&MainRun>,
         min_index: usize,
         session: u64,
+        program: Option<std::sync::Arc<craps_engine::strategy::Program>>,
     ) {
         let (cfg, seed, envelope) = match run {
             Some(r) => {
@@ -125,18 +136,37 @@ impl ReplayState {
         // The theater plays the night as the Findings framed it: the
         // horizon window (the ruin view's continuation past it belongs to
         // Endurance's numbers, not this stage).
-        let trace = trace_session(
-            &cfg.sel,
-            &cfg.rules(),
-            min_cents,
-            cfg.budget_cents,
-            cfg.quit_target_cents(),
-            cfg.horizon_rolls(),
-            cfg.horizon_rolls(),
-            s,
-        );
+        let (trace, bench) = match &program {
+            Some(p) => {
+                let b = craps_engine::strategy::bench_session(
+                    p,
+                    &cfg.rules(),
+                    min_cents,
+                    cfg.budget_cents,
+                    cfg.quit_target_cents(),
+                    cfg.horizon_rolls(),
+                    cfg.horizon_rolls(),
+                    s,
+                );
+                (b.as_session_trace(), Some(b))
+            }
+            None => (
+                trace_session(
+                    &cfg.sel,
+                    &cfg.rules(),
+                    min_cents,
+                    cfg.budget_cents,
+                    cfg.quit_target_cents(),
+                    cfg.horizon_rolls(),
+                    cfg.horizon_rolls(),
+                    s,
+                ),
+                None,
+            ),
+        };
         self.position = trace.events.len() as f64;
         self.trace = Some(trace);
+        self.bench = bench;
         self.ghost_trace = None;
         self.session = session;
         self.min_index = min_index;
@@ -315,6 +345,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         }
     });
 
+    // The Bench: when a strategy played this night, its rules and the
+    // attribution of every cent sit under the transport that steps it.
+    super::bench::ledger(app, ui, revealed);
+
     // Ghost strategy on the same dice: the live Design selection replayed
     // against this night's identical rolls.
     if app.replay.ghost && app.replay.ghost_trace.is_none() {
@@ -451,7 +485,7 @@ mod tests {
 
     fn loaded_state() -> ReplayState {
         let mut st = ReplayState::default();
-        st.load(&SimConfig::default(), None, 0, 3);
+        st.load_with(&SimConfig::default(), None, 0, 3, None);
         assert!(st.trace.is_some(), "trace loads without a run");
         st
     }

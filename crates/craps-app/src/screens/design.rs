@@ -49,17 +49,45 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         ui.add_enabled_ui(!busy, |ui| {
-            ui.columns(2, |cols| {
-                bet_rail(app, &mut cols[0], focus);
-                right_column(app, &mut cols[1], focus);
-            });
+            // Which surface builds the player is the same choice as which
+            // player runs: picking Rules is picking the strategy, and there
+            // is no second switch to disagree with this one.
+            player_picker(app, ui);
+            ui.add_space(10.0);
+            if app.use_strategy {
+                super::bench::authoring(app, ui);
+            } else {
+                ui.columns(2, |cols| {
+                    bet_rail(app, &mut cols[0], focus);
+                    right_column(app, &mut cols[1], focus);
+                });
+            }
         });
         ui.add_space(10.0);
         order_ticket(app, ui);
         ui.add_space(10.0);
         paste_sentence(app, ui);
-        ui.add_space(10.0);
-        super::bench::show(app, ui);
+    });
+}
+
+/// `Checkboxes | Rules` — the two ways to build a player.
+fn player_picker(app: &mut App, ui: &mut egui::Ui) {
+    let t = app.theme.clone();
+    ui.horizontal(|ui| {
+        for (label, strategy) in [("Checkboxes", false), ("Rules", true)] {
+            let selected = app.use_strategy == strategy;
+            if ui
+                .selectable_label(
+                    selected,
+                    RichText::new(label)
+                        .font(FontId::new(type_scale::BODY, theme::sans_medium()))
+                        .color(if selected { t.ink } else { t.ink2 }),
+                )
+                .clicked()
+            {
+                app.use_strategy = strategy;
+            }
+        }
     });
 }
 

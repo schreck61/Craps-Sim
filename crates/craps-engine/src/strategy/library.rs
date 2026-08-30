@@ -86,16 +86,25 @@ pub fn from_selection(sel: &BetSelection, rules: &Rules) -> Strategy {
         );
     }
     if takes_odds {
-        // Odds need a flat behind them; asking without one is a refusal, so
-        // the rule asks only when there is something to back.
-        out.push(
-            Rule::new(Trigger::Roll, vec![odds(BetRef::PassOdds)])
-                .when(and(point_is_on(), Expr::Read(Read::Up(BetRef::Pass)))),
-        );
-        out.push(
-            Rule::new(Trigger::Roll, vec![odds(BetRef::DontPassLay)])
-                .when(and(point_is_on(), Expr::Read(Read::Up(BetRef::DontPass)))),
-        );
+        // Odds need a flat behind them, so the rule asks only when there is
+        // something to back — and the rule only exists when this player
+        // makes that flat at all. Emitting a don't-pass-odds rule for a
+        // pass-line player produced a rule that could never fire, which the
+        // Bench then reported as a dead rule: the first such warning most
+        // users would ever see would have been a false alarm on code the
+        // app generated itself.
+        if sel.pass_line {
+            out.push(
+                Rule::new(Trigger::Roll, vec![odds(BetRef::PassOdds)])
+                    .when(and(point_is_on(), Expr::Read(Read::Up(BetRef::Pass)))),
+            );
+        }
+        if sel.dont_pass {
+            out.push(
+                Rule::new(Trigger::Roll, vec![odds(BetRef::DontPassLay)])
+                    .when(and(point_is_on(), Expr::Read(Read::Up(BetRef::DontPass)))),
+            );
+        }
     }
     for (i, &num) in PLACE_NUMS.iter().enumerate() {
         if sel.place[i] {
@@ -321,6 +330,36 @@ mod tests {
         for (name, sel) in explore_strategies() {
             let p = compile(&from_selection(&sel, &r)).unwrap();
             assert!(p.features.is_empty(), "{name} declared {:?}", p.features);
+        }
+    }
+
+    /// Nothing `from_selection` generates can be dead on arrival. A rule
+    /// that could never fire is a real diagnostic; producing one from the
+    /// app's own button would teach users to ignore it.
+    #[test]
+    fn the_generated_player_has_no_rule_that_cannot_fire() {
+        let r = rules(OddsPolicy::X345);
+        for (name, sel) in explore_strategies() {
+            let program = compile(&from_selection(&sel, &r)).unwrap();
+            // 2,000 seeds is far past the point where a live rule stays
+            // unfired by luck; anything still at zero is structural.
+            let mut fired = vec![0u32; program.rule_count()];
+            for seed in 0..2_000u64 {
+                let t = crate::strategy::bench_session(
+                    &program, &r, 1000, 30_000, None, 200_000, 400, seed,
+                );
+                for (i, n) in t.fire_counts.iter().enumerate() {
+                    fired[i] += n;
+                }
+            }
+            let ast = from_selection(&sel, &r);
+            let dead: Vec<String> = fired
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| **n == 0)
+                .map(|(i, _)| crate::strategy::render_rule(&ast, i))
+                .collect();
+            assert!(dead.is_empty(), "{name} generated dead rules: {dead:#?}");
         }
     }
 

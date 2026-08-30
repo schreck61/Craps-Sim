@@ -358,46 +358,117 @@ sparklines are unchanged.
 
 ## 7. Worked Examples
 
-Each is a strategy that cannot be expressed today.
+Each is a strategy that could not be expressed before the language
+existed. **This section is generated** from
+`crates/craps-engine/src/strategy/examples.rs`, where every one of them
+is parsed, compiled and simulated by the test suite. It was hand-written
+once and had drifted out of agreement with the grammar within a
+milestone — naming triggers that do not exist and an `in` operator that
+was never built — so it is no longer hand-written.
 
-**Press the 6 and 8 twice, then collect.**
+They ship in the app under **Examples**, as demonstrations of the
+language and not as advice: most are bad bets and one is deliberately
+superstitious.
+
+**Press twice, then collect**
+
+> *Place the 6 and 8; press each on its first two hits; regress after
+> that.*
+
+The thing that could not be said before: a bet whose size depends on how
+many times its own number has come.
+
 ```
-  on point-established: bet place 6, 8 at 1u
-  on win of place(n) when hits_this_shooter(n) <= 2: press place(n) by 1u
-  on win of place(n) when hits_this_shooter(n) > 2:  regress place(n) to 1u
+strategy "Press twice, then collect" language 1
+
+on come-out:
+    bet pass base
+
+on roll when point != 0 and point != 6:
+    bet place 6 base
+
+on roll when point != 0 and point != 8:
+    bet place 8 base
+
+on win of place 6 when hits-this-shooter(6) <= 2:
+    press place 6 to stake(place 6) * 2
+
+on win of place 6 when hits-this-shooter(6) > 2:
+    regress place 6 to base
+
+on win of place 8 when hits-this-shooter(8) <= 2:
+    press place 8 to stake(place 8) * 2
+
+on win of place 8 when hits-this-shooter(8) > 2:
+    regress place 8 to base
 ```
 
-**Hedged don't with flat place bets** (per-stream progressions):
+**Off until the shooter proves himself**
+
+> *Place bets off after a seven-out until the shooter makes a point.*
+
+Memory, and a bet that sits on the felt resolving nothing.
+
 ```
-  use martingale on dont-pass
-  use flat on all place
-  on come-out: bet dont-pass 1u
-  on point-established: bet place 6, 8 at 1u
+strategy "Off until the shooter proves himself" language 1
+
+var trusted = 0
+
+on seven-out:
+    set trusted = 0
+
+on point-made:
+    set trusted = 1
+
+on roll when point != 0:
+    bet place 6 base
+    bet place 8 base
+
+on roll when trusted == 0:
+    working place 6 off
+    working place 8 off
+
+on roll when trusted == 1:
+    working place 6 on
+    working place 8 on
 ```
 
-**Off after a seven-out until the shooter makes a point.**
+**Stop loss and stop win**
+
+> *Stop at −$200 or +$150, whichever comes first.*
+
 ```
-  var trusted = 0
-  on seven-out:  set trusted = 0
-  on point-made: set trusted = 1
-  on roll when trusted == 0: working all place off
-  on roll when trusted == 1: working all place on
+strategy "Stop loss and stop win" language 1
+
+on come-out:
+    bet pass base
+
+on roll when profit >= $150 or profit <= -$200:
+    leave "enough"
 ```
 
-**Stop-loss and stop-win together** (the current quit rule, generalized):
-```
-  on roll when profit >= 15000 or profit <= -20000: leave
-```
+**The field is due (superstition)**
 
-**Superstition, modeled honestly** (Principle 5):
+> *Bet the field only after two field numbers in a row.*
+
+Nonsense, faithfully modeled. Principle 5: a language that could only
+express sound play could not refute unsound play, and refutation is the
+product.
+
 ```
-  var streak = 0
-  on roll when last_total in 2,3,4,9,10,11,12: set streak = streak + 1
-  on roll when not (last_total in 2,3,4,9,10,11,12): set streak = 0
-  on roll when streak >= 2: bet field 1u
+strategy "The field is due" language 1
+
+var streak = 0
+
+on roll when last-total <= 4 or last-total >= 9:
+    set streak = streak + 1
+
+on roll when not (last-total <= 4 or last-total >= 9):
+    set streak = 0
+
+on roll when streak >= 2:
+    bet field base
 ```
-The Duel then puts this against flat pass-line on identical dice, and the
-paired-difference histogram says the rest.
 
 ## 8. The Bench
 
@@ -686,13 +757,31 @@ debugging surface for P2 and P3 themselves.
   `BetEventKind::Won` gained `stake_returned`, because a ledger that cannot
   tell a pass-line win from a place-bet win cannot account for the rail, and
   §8 promises exactly that accounting.
-- **P4b — done.** The panel on the Design screen, collapsed by default: the
-  source, a compile that says where and what in words, one-session run,
-  step transport, numbered rule rows carrying fire counts (lit when they
-  fired on this roll, amber when they never fired at all), and the ledger
-  attributing every cent either to the rule that asked for it or to the
-  table. Its own pixel snapshot, because the panel is collapsed by default
-  and the picture worth having is of it in use.
+- **P4b — done, then rebuilt after a design review.** The first version was
+  a collapsed panel at the bottom of the Design screen with a transport of
+  its own. The review's verdict — *"a debugger you cannot debug with"* — was
+  right: it reimplemented a worse transport than the one Replay already had,
+  bound no keys, showed no dice strip, and left `BenchTrace::refusals()`
+  computed and uncalled, so a refusal on roll 91 of 137 could only be found
+  by clicking ninety-one times.
+
+  It now splits along the seam the information architecture already had.
+  **Authoring** is on Design behind a `Checkboxes | Rules` control, because
+  Design builds the player and choosing to write a strategy is the same act
+  as choosing to play one — there is no second switch to disagree with that
+  one. **The ledger** is on Replay, which owns the transport, the keyboard,
+  the dice strip and the population envelope; §8 always said the Bench
+  should reuse them. A strategy night is benched rather than merely traced,
+  so `as_session_trace` lets every existing view read it without knowing.
+
+  Also from the review, and all of it correct: the run conditions are stated
+  (the table minimum decides refusals and went unsaid); the session's
+  refusals are listed together, each one a way to reach it; the night's
+  ending is told; instructions-per-decision and a debug-printed feature mask
+  came off a Saturday user's screen; and the colours came back inside
+  Principle 2 — a rule that fired is raised onto the next surface rather
+  than painted blue, a rule that never fired is demoted rather than alarmed,
+  and its `0×` carries the meaning without depending on colour at all.
 
 **P4c — The run path (1.5 dd). Done.** A design review found the hole this
 roadmap left: no milestone before P7 connected a compiled `Program` to a

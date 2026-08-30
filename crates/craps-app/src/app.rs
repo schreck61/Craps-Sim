@@ -282,8 +282,13 @@ impl App {
 
     /// Jump to Replay with one exactly re-simulated session under the lens.
     pub fn open_replay(&mut self, min_index: usize, session: u64) {
-        self.replay
-            .load(&self.cfg, self.main_run.as_ref(), min_index, session);
+        self.replay.load_with(
+            &self.cfg,
+            self.main_run.as_ref(),
+            min_index,
+            session,
+            self.live_program(),
+        );
         self.mode = Mode::Replay;
     }
 

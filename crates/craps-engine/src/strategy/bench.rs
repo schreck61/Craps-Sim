@@ -24,7 +24,7 @@ use crate::bets::{BetSelection, Rules};
 use crate::session::{run_with_player, SessionOutcomes};
 use crate::strategy::player::Compiled;
 use crate::strategy::Program;
-use crate::trace::{BetEvent, RollObserver};
+use crate::trace::{BetEvent, RollEvent, RollObserver, SessionTrace};
 
 /// One thing the table did, and the rule that asked for it.
 ///
@@ -91,6 +91,51 @@ impl BenchTrace {
                     .map(move |e| (r.roll, *e))
             })
             .collect()
+    }
+}
+
+impl BenchTrace {
+    /// The same session as a plain [`SessionTrace`], so everything already
+    /// built to read one — the dice strip, the trajectory, the population
+    /// envelope — reads a strategy's night without knowing it is one.
+    ///
+    /// The rule attribution is what is dropped; it lives on in the
+    /// `BenchTrace` beside this, which is what the ledger reads.
+    pub fn as_session_trace(&self) -> SessionTrace {
+        SessionTrace {
+            seed: self.seed,
+            events: self
+                .rolls
+                .iter()
+                .map(|r| RollEvent {
+                    roll: r.roll,
+                    dice: r.dice,
+                    point_after: r.point_after,
+                    cash_after: r.cash_after,
+                    wealth_after: r.wealth_after,
+                    events: r.events.iter().map(|e| e.event).collect(),
+                })
+                .collect(),
+            outcome: self.outcome,
+        }
+    }
+
+    /// How the night ended, in words. The Bench computed this from the
+    /// first version and then discarded it; a session you can step through
+    /// without being told whether it busted is a story with no last page.
+    pub fn ending(&self) -> &'static str {
+        let h = &self.outcome.horizon;
+        if h.busted {
+            "the bankroll could no longer cover a bet"
+        } else if h.hit_target {
+            "the quit-while-ahead target was reached"
+        } else {
+            // The roll cap and the session length coincide whenever a night
+            // is replayed over its own horizon, so naming the cap here would
+            // be wrong more often than right. From the player's side both
+            // mean the same thing: the night was over.
+            "the night ran its full length"
+        }
     }
 }
 

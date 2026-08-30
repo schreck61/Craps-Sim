@@ -13,13 +13,32 @@
 //! which is the point: if the text form could not say them, it would not be
 //! the second editor Principle 2 claims it is — it would be a subset with a
 //! nicer face.
+//!
+//! They ship, via [`EXAMPLES`]. The first version kept them behind
+//! `cfg(test)` on the grounds that their job was to prove the language can
+//! say them and not to be a menu — which conflated a menu of *recommended
+//! play*, which this app rightly refuses to offer, with a menu of *syntax
+//! demonstrations*, without which nobody can start writing. Most of these
+//! are bad bets and one is deliberately superstitious; none of them is
+//! advice.
 
-#![cfg(test)]
-
+#[cfg(test)]
 use crate::bets::{BetSelection, OddsPolicy, Progression, Rules};
+#[cfg(test)]
 use crate::strategy::ast::Strategy;
+#[cfg(test)]
 use crate::strategy::{compile, parse};
 
+/// The examples, named, for an app that has to teach this language to
+/// somebody who has never seen it.
+pub const EXAMPLES: &[(&str, &str)] = &[
+    ("Press twice, then collect", PRESS_TWICE),
+    ("Off until the shooter proves himself", OFF_UNTIL_TRUSTED),
+    ("Stop loss and stop win", STOP_RULES),
+    ("The field is due (superstition)", FIELD_IS_DUE),
+];
+
+#[cfg(test)]
 fn rules() -> Rules {
     Rules {
         odds_policy: OddsPolicy::X345,
@@ -35,7 +54,7 @@ fn rules() -> Rules {
 ///
 /// The thing that could not be said before: a bet whose size depends on how
 /// many times its own number has come.
-const PRESS_TWICE: &str = r#"
+pub const PRESS_TWICE: &str = r#"
 strategy "Press twice, then collect" language 1
 
 on come-out:
@@ -63,7 +82,7 @@ on win of place 8 when hits-this-shooter(8) > 2:
 /// > *Place bets off after a seven-out until the shooter makes a point.*
 ///
 /// Memory, and a bet that sits on the felt resolving nothing.
-const OFF_UNTIL_TRUSTED: &str = r#"
+pub const OFF_UNTIL_TRUSTED: &str = r#"
 strategy "Off until the shooter proves himself" language 1
 
 var trusted = 0
@@ -88,7 +107,7 @@ on roll when trusted == 1:
 "#;
 
 /// > *Stop at −$200 or +$150, whichever comes first.*
-const STOP_RULES: &str = r#"
+pub const STOP_RULES: &str = r#"
 strategy "Stop loss and stop win" language 1
 
 on come-out:
@@ -103,7 +122,7 @@ on roll when profit >= $150 or profit <= -$200:
 /// Nonsense, faithfully modeled. Principle 5: a language that could only
 /// express sound play could not refute unsound play, and refutation is the
 /// product.
-const FIELD_IS_DUE: &str = r#"
+pub const FIELD_IS_DUE: &str = r#"
 strategy "The field is due" language 1
 
 var streak = 0
@@ -119,6 +138,7 @@ on roll when streak >= 2:
 "#;
 
 /// Every example, as written above.
+#[cfg(test)]
 fn all() -> Vec<Strategy> {
     [PRESS_TWICE, OFF_UNTIL_TRUSTED, STOP_RULES, FIELD_IS_DUE]
         .iter()
@@ -126,18 +146,22 @@ fn all() -> Vec<Strategy> {
         .collect()
 }
 
+#[cfg(test)]
 fn press_twice_then_collect() -> Strategy {
     parse(PRESS_TWICE).unwrap()
 }
 
+#[cfg(test)]
 fn off_until_the_shooter_proves_himself() -> Strategy {
     parse(OFF_UNTIL_TRUSTED).unwrap()
 }
 
+#[cfg(test)]
 fn stop_loss_and_stop_win() -> Strategy {
     parse(STOP_RULES).unwrap()
 }
 
+#[cfg(test)]
 fn the_field_is_due() -> Strategy {
     parse(FIELD_IS_DUE).unwrap()
 }

@@ -218,9 +218,8 @@ fn visual_all_screens() {
     harness.snapshot("09-horizon-light");
 }
 
-/// The Bench, open with a session stepped onto it. Its own snapshot rather
-/// than part of the Design shot, because the panel is collapsed by default
-/// and the point of the picture is what it looks like in use.
+/// The Bench, where it lives now: Replay, stepping a strategy night, with
+/// the rules that produced it and every cent attributed beside them.
 #[test]
 #[ignore] // GPU-dependent: pinned-backend CI job + local generation only.
 fn visual_bench() {
@@ -232,34 +231,23 @@ fn visual_bench() {
             app.cfg.sel.take_odds = true;
             app.cfg.sel.set_place(6, true);
             app.cfg.sel.set_place(8, true);
-            app.bench.open = true;
+            let s = craps_engine::strategy::from_selection(&app.cfg.sel, &app.cfg.rules());
+            app.bench.source = craps_engine::strategy::render(&s);
+            app.bench.build();
+            app.use_strategy = true;
             app
         });
     settle(&mut harness, 2);
     {
         let app = harness.state_mut();
-        // What the "Take the current player" button does, then a run — the
-        // panel is worth looking at full, not empty.
-        let s = craps_engine::strategy::from_selection(&app.cfg.sel, &app.cfg.rules());
-        app.bench.source = craps_engine::strategy::render(&s);
-        app.bench.build();
-        let p = app.bench.program.clone().unwrap();
-        app.bench.trace = Some(craps_engine::strategy::bench_session(
-            &p,
-            &app.cfg.rules(),
-            1000,
-            app.cfg.budget_cents,
-            None,
-            app.cfg.max_rolls,
-            app.cfg.horizon_rolls(),
-            7,
-        ));
-        app.bench.position = 12;
+        app.open_replay(0, 7);
     }
-    // The Design screen scrolls, and the Bench sits under the bet rail, so
-    // the picture has to be taken where the panel actually is.
     settle(&mut harness, 2);
-    // The wheel goes where the pointer is; without this it scrolls nothing.
+    {
+        let app = harness.state_mut();
+        app.replay.position = 12.0;
+    }
+    settle(&mut harness, 2);
     harness.event(egui::Event::PointerMoved(egui::pos2(800.0, 500.0)));
     harness.step();
     for _ in 0..40 {
