@@ -404,6 +404,23 @@ impl Parser {
             self.expect(")")?;
             return Ok(Trigger::Total(n));
         }
+        // `on come point on 6:` — a come flat reaching a box number, which
+        // is a different event from the table's point being established and
+        // could only be approximated with memory before.
+        if self.peek().eq_ignore_ascii_case("come") && self.peek_at(1).eq_ignore_ascii_case("point")
+        {
+            self.at += 2;
+            self.expect("on")?;
+            return Ok(Trigger::ComePointEstablished(self.number()? as u8));
+        }
+        if self.peek().eq_ignore_ascii_case("dont")
+            && self.peek_at(1).eq_ignore_ascii_case("come")
+            && self.peek_at(2).eq_ignore_ascii_case("point")
+        {
+            self.at += 3;
+            self.expect("on")?;
+            return Ok(Trigger::DontComePointEstablished(self.number()? as u8));
+        }
         if self.eat("win") {
             self.expect("of")?;
             return Ok(Trigger::Win(self.bet_ref()?));
@@ -520,6 +537,7 @@ impl Parser {
             ("wins", 2),
             ("losses", 3),
             ("streak", 4),
+            ("paid", 5),
         ] {
             if self.peek().eq_ignore_ascii_case(word) && self.peek_at(1) == "(" {
                 self.at += 2;
@@ -530,7 +548,8 @@ impl Parser {
                     1 => Read::Up(b),
                     2 => Read::Wins(b),
                     3 => Read::Losses(b),
-                    _ => Read::Streak(b),
+                    4 => Read::Streak(b),
+                    _ => Read::Paid(b),
                 }));
             }
         }
@@ -957,6 +976,7 @@ fn read_text(r: Read) -> String {
         Read::Wins(b) => format!("wins({})", bet_text(b)),
         Read::Losses(b) => format!("losses({})", bet_text(b)),
         Read::Streak(b) => format!("streak({})", bet_text(b)),
+        Read::Paid(b) => format!("paid({})", bet_text(b)),
         Read::Hits(n) => format!("hits({n})"),
         Read::HitsThisShooter(n) => format!("hits-this-shooter({n})"),
         Read::ComePoint(n) => format!("come-point({n})"),
@@ -1094,6 +1114,8 @@ fn trigger_text(t: Trigger) -> String {
         Trigger::SevenOut => "seven-out".into(),
         Trigger::Roll => "roll".into(),
         Trigger::Total(n) => format!("total({n})"),
+        Trigger::ComePointEstablished(n) => format!("come point on {n}"),
+        Trigger::DontComePointEstablished(n) => format!("dont come point on {n}"),
         Trigger::Win(b) => format!("win of {}", bet_text(b)),
         Trigger::Loss(b) => format!("loss of {}", bet_text(b)),
     }
@@ -1451,6 +1473,34 @@ on roll when profit <= -$200 or profit >= $150:
                 e.message()
             );
         }
+    }
+
+    /// The two gaps the ergonomics assessment found in the vocabulary,
+    /// and what they let a strategy say now.
+    #[test]
+    fn a_come_point_and_a_payout_can_be_named() {
+        let s = parse(
+            "strategy \"v\" language 1\n\
+             for each of 4, 5, 6, 8, 9, 10 as n {\n\
+                 on come point on n:\n    bet odds on come n max\n\
+                 on dont come point on n:\n    bet odds on dont come n max\n\
+             }\n\
+             on win of place 6:\n\
+                 press place 6 to stake(place 6) + paid(place 6) / 2\n",
+        )
+        .unwrap_or_else(|e| panic!("{}", e.message()));
+        assert_eq!(s.rules.len(), 13);
+        round_trip(&s);
+        let p = crate::strategy::compile(&s).unwrap();
+        // Reading a payout is win/loss history, so the mask says so.
+        assert!(p.features.has(crate::strategy::FeatureMask::STREAKS));
+    }
+
+    #[test]
+    fn a_come_point_trigger_needs_a_box_number() {
+        let s = parse("strategy \"v\" language 1\non come point on 7:\n    bet pass\n").unwrap();
+        let e = crate::strategy::compile(&s).unwrap_err();
+        assert!(e.message().contains("not a box number"), "{}", e.message());
     }
 
     #[test]

@@ -110,6 +110,7 @@ fn reads() -> Vec<(String, Read)> {
         v.push((format!("{name}'s run of wins or losses"), Read::Streak(b)));
         v.push((format!("times {name} has won"), Read::Wins(b)));
         v.push((format!("times {name} has lost"), Read::Losses(b)));
+        v.push((format!("what {name} just paid"), Read::Paid(b)));
     }
     v
 }
@@ -359,6 +360,23 @@ fn trigger_slot(ui: &mut egui::Ui, trigger: &mut Trigger) -> bool {
                     changed = true;
                 }
             }
+            for n in PLACE_NUMS {
+                for (label, t) in [
+                    (
+                        format!("a come point is established on {n}"),
+                        Trigger::ComePointEstablished(n),
+                    ),
+                    (
+                        format!("a don't come point is established on {n}"),
+                        Trigger::DontComePointEstablished(n),
+                    ),
+                ] {
+                    if ui.selectable_label(*trigger == t, label).clicked() {
+                        *trigger = t;
+                        changed = true;
+                    }
+                }
+            }
             for n in [2u8, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] {
                 let t = Trigger::Total(n);
                 if ui
@@ -391,6 +409,10 @@ fn trigger_label(t: Trigger) -> String {
     }
     match t {
         Trigger::Total(n) => format!("the roll totals {n}"),
+        Trigger::ComePointEstablished(n) => format!("a come point is established on {n}"),
+        Trigger::DontComePointEstablished(n) => {
+            format!("a don't come point is established on {n}")
+        }
         Trigger::Win(b) => format!("{} wins", craps_engine::strategy::bet_name(b)),
         Trigger::Loss(b) => format!("{} loses", craps_engine::strategy::bet_name(b)),
         _ => "every roll".into(),
@@ -856,6 +878,12 @@ mod tests {
             .iter()
             .map(|(_, t)| *t)
             .chain((2u8..=12).map(Trigger::Total))
+            .chain(PLACE_NUMS.iter().flat_map(|&n| {
+                [
+                    Trigger::ComePointEstablished(n),
+                    Trigger::DontComePointEstablished(n),
+                ]
+            }))
             .chain(
                 streamed_bets()
                     .into_iter()
@@ -872,6 +900,8 @@ mod tests {
             Trigger::Total(7),
             Trigger::Win(BetRef::Place(6)),
             Trigger::Loss(BetRef::Pass),
+            Trigger::ComePointEstablished(6),
+            Trigger::DontComePointEstablished(10),
         ] {
             assert!(offered.contains(&t), "{t:?} is not offered");
             // And every one of them has a label rather than a debug print.

@@ -110,6 +110,8 @@ impl Player for Compiled<'_> {
             s.hist.last_total_now,
             s.hist.won,
             s.hist.lost,
+            s.hist.come_established,
+            s.hist.dont_come_established,
         );
         s.run_program(self.program, d);
     }

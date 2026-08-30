@@ -362,6 +362,71 @@ mod tests {
         assert!(saw_pass_from_rule_0 && saw_place_from_rule_1);
     }
 
+    /// The come-point trigger fires when a come flat reaches a number, and
+    /// only then — not every roll the point stands, which is all the
+    /// language could approximate before.
+    #[test]
+    fn a_come_point_trigger_fires_on_establishment_only() {
+        let r = rules();
+        let standing = program(
+            "strategy \"standing\" language 1\n\
+             on come-out:\n    bet pass\n\
+             on roll when point != 0 and live-come < 2:\n    bet come\n\
+             on roll when come-point(6):\n    bet odds on come 6 max\n",
+        );
+        let edge = program(
+            "strategy \"edge\" language 1\n\
+             on come-out:\n    bet pass\n\
+             on roll when point != 0 and live-come < 2:\n    bet come\n\
+             on come point on 6:\n    bet odds on come 6 max\n",
+        );
+        let a = bench_session(&standing, &r, 1000, 100_000, None, 200_000, 300, 4);
+        let b = bench_session(&edge, &r, 1000, 100_000, None, 200_000, 300, 4);
+        assert!(
+            b.fire_counts[2] > 0,
+            "the come-point trigger never fired at all"
+        );
+        // A come point on the 6 resolves on a 6 or a 7 — 11 of 36 — so it
+        // stands 36/11 ≈ 3.27 rolls on average. The state test fires once
+        // per roll it stands; the event test fires once per establishment.
+        // Their ratio is therefore that expected duration, which is a
+        // sharper claim than "fewer" and would catch the trigger firing on
+        // the wrong roll as well as on every roll.
+        let ratio = a.fire_counts[2] as f64 / b.fire_counts[2] as f64;
+        assert!(
+            (2.6..4.0).contains(&ratio),
+            "the state test fired {} times and the event test {}, a ratio of \
+             {ratio:.2}; a come point stands 36/11 ≈ 3.27 rolls, so this is \
+             not the event it claims to be",
+            a.fire_counts[2],
+            b.fire_counts[2]
+        );
+    }
+
+    /// A payout can be read, so "press it by half of what it paid" is a
+    /// rule rather than only a progression.
+    #[test]
+    fn a_payout_can_be_pressed_with() {
+        let r = rules();
+        let p = program(
+            "strategy \"halfpress\" language 1\n\
+             on roll when point != 0 and point != 6:\n    bet place 6\n\
+             on win of place 6:\n\
+                 press place 6 to stake(place 6) + paid(place 6) / 2\n",
+        );
+        let t = bench_session(&p, &r, 1000, 100_000, None, 200_000, 400, 9);
+        assert!(t.fire_counts[1] > 0, "the press rule never fired");
+        // A place 6 pays 7:6 on a $12 base — $14 — so half of it is $7, and
+        // the pressed bet rounds to the $6 unit above $19.
+        let pressed = t.rolls.iter().flat_map(|x| &x.events).any(|e| {
+            matches!(e.event.bet, crate::trace::BetKind::Place(6))
+                && matches!(e.event.kind, BetEventKind::Placed)
+                && e.event.stake_cents > 0
+                && e.rule == Some(1)
+        });
+        assert!(pressed, "no press was ever attributed to the rule");
+    }
+
     /// A rule that cannot fire is reported, which is the whole point: the
     /// author sees a zero instead of inferring one from a distribution.
     #[test]

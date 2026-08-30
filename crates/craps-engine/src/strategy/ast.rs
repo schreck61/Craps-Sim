@@ -45,6 +45,12 @@ pub enum Trigger {
     Roll,
     /// The roll just resolved totaled this.
     Total(u8),
+    /// A come point was established on this number — a come flat reached
+    /// it. Distinct from [`Trigger::PointEstablished`], which is the
+    /// table's own point.
+    ComePointEstablished(u8),
+    /// A don't come point was established on this number.
+    DontComePointEstablished(u8),
     /// This stream just won.
     Win(BetRef),
     /// This stream just lost.
@@ -82,6 +88,8 @@ pub enum Read {
     Wins(BetRef),
     Losses(BetRef),
     Streak(BetRef),
+    /// What this stream was paid on the roll just resolved.
+    Paid(BetRef),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

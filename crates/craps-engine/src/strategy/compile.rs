@@ -34,6 +34,8 @@ pub enum CompileError {
     /// A win/loss trigger or a history read named a bet with no stream of
     /// its own — odds resolve with the flat they back.
     NoStreamOfItsOwn(BetRef),
+    /// A come-point trigger named something that is not a box number.
+    NotABoxNumber(u8),
 }
 
 impl CompileError {
@@ -54,6 +56,9 @@ impl CompileError {
             }
             CompileError::TooManyActions { asked, limit } => {
                 format!("One decision could place {asked} bets; the table hears {limit}.")
+            }
+            CompileError::NotABoxNumber(n) => {
+                format!("{n} is not a box number (4, 5, 6, 8, 9 or 10).")
             }
             CompileError::NoStreamOfItsOwn(b) => format!(
                 "{b:?} has no win/loss record of its own — odds resolve with the flat behind them."
@@ -254,7 +259,7 @@ fn collect_features(e: &Expr, features: &mut FeatureMask) -> Result<(), CompileE
     match e {
         Expr::Const(_) | Expr::Var(_) => {}
         Expr::Read(r) => {
-            if let Read::Wins(b) | Read::Losses(b) | Read::Streak(b) = r {
+            if let Read::Wins(b) | Read::Losses(b) | Read::Streak(b) | Read::Paid(b) = r {
                 stream_bit(*b)?;
             }
             *features = features.with(feature_of(*r));
@@ -277,6 +282,12 @@ fn compile_trigger(t: Trigger, features: &mut FeatureMask) -> Result<TriggerTest
             *features = features.with(FeatureMask::DICE);
             TriggerTest::Total(n)
         }
+        Trigger::ComePointEstablished(n) => TriggerTest::ComeEstablished(
+            crate::place_index(n).ok_or(CompileError::NotABoxNumber(n))? as u8,
+        ),
+        Trigger::DontComePointEstablished(n) => TriggerTest::DontComeEstablished(
+            crate::place_index(n).ok_or(CompileError::NotABoxNumber(n))? as u8,
+        ),
         Trigger::Win(b) => {
             *features = features.with(FeatureMask::STREAKS);
             TriggerTest::Win(stream_bit(b)?)
@@ -308,7 +319,7 @@ fn feature_of(r: Read) -> FeatureMask {
     match r {
         Read::LastTotal | Read::Roll | Read::RollsThisShooter | Read::Shooter => FeatureMask::DICE,
         Read::Hits(_) | Read::HitsThisShooter(_) => FeatureMask::HITS,
-        Read::Wins(_) | Read::Losses(_) | Read::Streak(_) => FeatureMask::STREAKS,
+        Read::Wins(_) | Read::Losses(_) | Read::Streak(_) | Read::Paid(_) => FeatureMask::STREAKS,
         Read::PeakProfit | Read::Drawdown => FeatureMask::PEAK,
         _ => FeatureMask::NONE,
     }

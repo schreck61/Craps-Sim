@@ -210,9 +210,14 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
 
     #[inline(always)]
     pub(crate) fn emit(&mut self, bet: BetKind, kind: BetEventKind, stake_cents: i64) {
+        if !F::MASK.is_empty() {
+            if let BetEventKind::Traveled { to } = kind {
+                self.hist.record_travel(bet, to);
+            }
+        }
         if F::MASK.has(FeatureMask::STREAKS) && self.features.has(FeatureMask::STREAKS) {
             match kind {
-                BetEventKind::Won { .. } => self.hist.record_win(bet),
+                BetEventKind::Won { paid_cents, .. } => self.hist.record_win(bet, paid_cents),
                 BetEventKind::Lost => self.hist.record_loss(bet),
                 _ => {}
             }
@@ -649,6 +654,9 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
             self.hist.fired = 0;
             self.hist.won = 0;
             self.hist.lost = 0;
+            self.hist.paid = [0; crate::strategy::view::STREAMS];
+            self.hist.come_established = 0;
+            self.hist.dont_come_established = 0;
             self.hist.last_total_now = t;
             if !self.features.is_empty() {
                 self.record_roll(t);

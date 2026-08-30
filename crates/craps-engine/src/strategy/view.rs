@@ -181,6 +181,16 @@ pub(crate) struct History {
     pub fired: u8,
     pub won: u32,
     pub lost: u32,
+    /// What each stream was paid on the roll just resolved, in cents.
+    /// Cleared every roll: "what did this bet just win" is a question about
+    /// one roll, and a stale answer would be worse than none.
+    pub paid: [i64; STREAMS],
+    /// Box numbers a come (or don't come) flat travelled to on the roll just
+    /// resolved — a come point being established, which is a different
+    /// event from the table's point being established and had no way to be
+    /// named before.
+    pub come_established: u8,
+    pub dont_come_established: u8,
     /// The total of the roll just resolved. Distinct from `last_total`,
     /// which only exists when a strategy declared it wanted dice history;
     /// a `total(7)` trigger needs the number whether or not it also wanted
@@ -204,16 +214,31 @@ impl History {
             fired: 0,
             won: 0,
             lost: 0,
+            paid: [0; STREAMS],
+            come_established: 0,
+            dont_come_established: 0,
             last_total_now: 0,
         }
     }
 
     #[inline]
-    pub(crate) fn record_win(&mut self, bet: BetKind) {
+    pub(crate) fn record_win(&mut self, bet: BetKind, paid_cents: i64) {
         if let Some(i) = stream_index(bet) {
             self.wins[i] = self.wins[i].saturating_add(1);
             self.streak[i] = self.streak[i].max(0).saturating_add(1);
             self.won |= 1 << i;
+            self.paid[i] = self.paid[i].saturating_add(paid_cents);
+        }
+    }
+
+    /// A come or don't come flat reached a box number.
+    #[inline]
+    pub(crate) fn record_travel(&mut self, bet: BetKind, to: u8) {
+        let Some(i) = place_index(to) else { return };
+        match bet {
+            BetKind::Come => self.come_established |= 1 << i,
+            BetKind::DontCome => self.dont_come_established |= 1 << i,
+            _ => {}
         }
     }
 
@@ -477,6 +502,16 @@ impl TableView<'_> {
     #[inline]
     pub fn streak(&self, bet: BetRef) -> i64 {
         stream_of(bet).map_or(0, |i| self.hist.streak[i] as i64)
+    }
+
+    /// What this stream was paid on the roll just resolved, in cents — the
+    /// winnings, not the stake. Zero on any roll it did not win.
+    ///
+    /// This is what makes "press it up by half of what it paid" sayable as
+    /// a rule; before it, that press existed only as a progression.
+    #[inline]
+    pub fn paid(&self, bet: BetRef) -> i64 {
+        stream_of(bet).map_or(0, |i| self.hist.paid[i])
     }
 }
 

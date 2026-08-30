@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The Explorer ranks your strategy too**, as its own rows beside the
   curated eleven, and the **Duel** will run it against any of them on
   identical dice.
+- **`on come point on 6:`** — a rule for a come flat reaching a number,
+  which is a different event from the table's point being established and
+  previously took a four-rule memory idiom per number to approximate.
+- **`paid(place 6)`** — what a bet was just paid, so pressing by half the
+  winnings is a rule and not only a progression.
 - **`for each of 4, 5, 6, 8, 9, 10 as n { … }`** — a rule written once and
   produced per number. 3-Point Molly was nine rules, six of them the same
   rule with a different number in it; it is four now. Blocks nest, and the

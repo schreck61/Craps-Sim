@@ -106,6 +106,9 @@ pub enum TriggerTest {
     Total(u8),
     Win(u8),
     Loss(u8),
+    /// A come point established on the place index carried here.
+    ComeEstablished(u8),
+    DontComeEstablished(u8),
 }
 
 /// A rule's condition, fused into the rule header when it matches a shape
@@ -158,6 +161,9 @@ pub struct Decision {
     /// One bit per stream, keyed like [`STREAMS`].
     pub won: u32,
     pub lost: u32,
+    /// One bit per place index, for come points established this roll.
+    pub come_established: u8,
+    pub dont_come_established: u8,
 }
 
 /// A compiled strategy: immutable, shareable, and the same bytes on every
@@ -526,6 +532,8 @@ fn trigger_matches(t: TriggerTest, d: Decision) -> bool {
         TriggerTest::Total(n) => d.total == n,
         TriggerTest::Win(stream) => d.won & (1 << stream) != 0,
         TriggerTest::Loss(stream) => d.lost & (1 << stream) != 0,
+        TriggerTest::ComeEstablished(i) => d.come_established & (1 << i) != 0,
+        TriggerTest::DontComeEstablished(i) => d.dont_come_established & (1 << i) != 0,
     }
 }
 
@@ -596,12 +604,21 @@ fn read(v: &TableView<'_>, r: Read) -> i64 {
         Read::Wins(b) => v.wins(b),
         Read::Losses(b) => v.losses(b),
         Read::Streak(b) => v.streak(b),
+        Read::Paid(b) => v.paid(b),
     }
 }
 
 /// The trigger bits and stream masks a decision carries, assembled by the
 /// session at the end of a roll.
-pub(crate) fn decision_from(fired: u8, total: u8, won: u32, lost: u32) -> Decision {
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn decision_from(
+    fired: u8,
+    total: u8,
+    won: u32,
+    lost: u32,
+    come_established: u8,
+    dont_come_established: u8,
+) -> Decision {
     // The won/lost sets are `u32` bitsets over the streams.
     const { assert!(STREAMS <= 32) };
     Decision {
@@ -609,6 +626,8 @@ pub(crate) fn decision_from(fired: u8, total: u8, won: u32, lost: u32) -> Decisi
         total,
         won,
         lost,
+        come_established,
+        dont_come_established,
     }
 }
 

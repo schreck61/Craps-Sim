@@ -121,7 +121,7 @@ because this is what decides which strategies are expressible:
 | Dice & point | `point` (0 = off), `last_total`, `roll`, `rolls_this_shooter`, `shooter` |
 | Money | `cash`, `wealth`, `profit`, `peak_profit`, `drawdown`, `handle` |
 | Layout | `up(bet)`, `stake(bet)`, `working(bet)`, `live_come`, `live_dont_come`, `on_table_face` |
-| History | `hits(n)`, `hits_this_shooter(n)`, `wins(bet)`, `losses(bet)`, `streak(bet)` |
+| History | `hits(n)`, `hits_this_shooter(n)`, `wins(bet)`, `losses(bet)`, `streak(bet)`, `paid(bet)` |
 | Memory | user-declared variables and flags |
 
 All values are `i64` cents or counts. **There is no floating-point arithmetic in
@@ -191,8 +191,14 @@ rules touching the same bet are resolved by order — last write wins — and th
 Bench shows both firing, so the shadowing is seen rather than debugged.
 
 **Triggers.** `session-start`, `come-out`, `point-established`, `point-made`,
-`seven-out`, `roll`, `total(n)`, `win of <bet>`, `loss of <bet>`,
-`every n rolls`.
+`seven-out`, `roll`, `total(n)`, `come point on n`, `dont come point on n`,
+`win of <bet>`, `loss of <bet>`.
+
+`come point on n` is a come flat reaching a box number, which is a different
+event from the table's own point being established and had no name until an
+ergonomics assessment went looking for one. Without it the only way to act on
+an establishment was to remember the previous state and compare — four rules
+per number, and easy to get subtly wrong.
 
 **Conditions.** Any boolean expression over §3.2 reads: comparisons, `and`,
 `or`, `not`, `+ - * / min max`, integer only.
