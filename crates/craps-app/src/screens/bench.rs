@@ -29,6 +29,18 @@ use crate::app::App;
 use crate::ui::numerals;
 use crate::ui::theme::{self, type_scale};
 
+/// What became of a strategy a sentence referred to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Resolution {
+    /// Same name, same rules. The sentence describes this machine's run.
+    Found,
+    /// Same name, different rules. Never silently run: the sentence's
+    /// numbers came from a strategy this machine no longer has.
+    Changed { got: u32 },
+    /// This machine has no strategy by that name.
+    Missing,
+}
+
 #[derive(Default)]
 pub struct BenchState {
     /// The strategy under test, as text. Starts empty; the button fills it
@@ -115,6 +127,31 @@ impl BenchState {
                 self.refresh_library();
             }
             Err(e) => self.library_note = Some(e),
+        }
+    }
+
+    /// Resolve a strategy a pasted sentence referred to.
+    ///
+    /// §10, and the reason the sentence carries a hash at all: a machine
+    /// with a strategy of that name but different rules must say so rather
+    /// than run the wrong player, and a machine without one must say that
+    /// rather than fall back to the bet rail.
+    pub fn resolve(&mut self, want: &crate::config::StrategyRef) -> Resolution {
+        self.refresh_library();
+        let Some(entry) = self.library.iter().find(|e| e.name == want.name).cloned() else {
+            return Resolution::Missing;
+        };
+        self.load_from(&entry);
+        match &self.program {
+            None => Resolution::Missing,
+            Some(p) => {
+                let got = crate::config::StrategyRef::of(p);
+                if got.hash == want.hash {
+                    Resolution::Found
+                } else {
+                    Resolution::Changed { got: got.hash }
+                }
+            }
         }
     }
 

@@ -715,3 +715,63 @@ fn exported_provenance_names_the_strategy_that_played() {
         "the exported sentence does not say a strategy played: {sentence}"
     );
 }
+
+/// A run played by a strategy is stale the moment the strategy changes
+/// under it — the same rule that governs every other setting.
+#[test]
+fn editing_a_strategy_strikes_its_results_stale() {
+    use craps_engine::strategy::{from_selection, render};
+
+    let mut h = build_app(|app| {
+        app.bench.source = render(&from_selection(&app.cfg.sel, &app.cfg.rules()));
+        app.bench.build();
+        app.use_strategy = true;
+    });
+    h.step();
+    let before = h.state().cfg.fingerprint();
+    assert!(
+        h.state().cfg.strategy.is_some(),
+        "the config knows who plays"
+    );
+
+    // A different strategy is a different scenario.
+    {
+        let app = h.state_mut();
+        app.bench.source =
+            "strategy \"Other\" language 1\non come-out:\n    bet dont pass\n".into();
+        app.bench.build();
+    }
+    h.step();
+    assert_ne!(
+        before,
+        h.state().cfg.fingerprint(),
+        "changing the strategy did not change the fingerprint"
+    );
+}
+
+/// With a strategy playing, the bet rail is not part of the scenario: it is
+/// not in the sentence, and touching it must not strike results stale.
+#[test]
+fn the_bet_rail_is_not_part_of_a_strategy_scenario() {
+    use craps_engine::strategy::{from_selection, render};
+
+    let mut h = build_app(|app| {
+        app.bench.source = render(&from_selection(&app.cfg.sel, &app.cfg.rules()));
+        app.bench.build();
+        app.use_strategy = true;
+    });
+    h.step();
+    let before = h.state().cfg.fingerprint();
+    let sentence = crate::sentence::render_text(&h.state().cfg);
+    assert!(sentence.contains("playing"), "{sentence}");
+
+    h.state_mut().cfg.sel.set_place(4, true);
+    h.state_mut().cfg.sel.any_seven = true;
+    h.step();
+    assert_eq!(
+        before,
+        h.state().cfg.fingerprint(),
+        "a control that is not in play changed the scenario"
+    );
+    assert_eq!(sentence, crate::sentence::render_text(&h.state().cfg));
+}

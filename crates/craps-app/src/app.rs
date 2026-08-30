@@ -176,7 +176,8 @@ impl App {
     /// What is playing, in the words the rail and the baseline use.
     pub fn live_player_label(&self) -> Option<String> {
         let p = self.live_program()?;
-        Some(format!("{} #{:04x}", p.name, p.hash & 0xffff))
+        let r = crate::config::StrategyRef::of(&p);
+        Some(format!("{} #{}", r.name, r.short()))
     }
 
     pub fn anything_running(&self) -> bool {
@@ -1065,6 +1066,12 @@ impl eframe::App for App {
                 }
             }
         }
+        // One source of truth: the configuration says which player is live,
+        // so the sentence, the fingerprint, the staleness badge and every
+        // exported provenance are reading the same answer as the runner.
+        self.cfg.strategy = self
+            .live_program()
+            .map(|p| crate::config::StrategyRef::of(&p));
         crate::tour::drive(self, &ctx);
         self.highlights.begin_frame();
         let mounted_last_frame: Vec<egui::Id> = ctx.data_mut(|d| {
@@ -1094,18 +1101,13 @@ impl eframe::App for App {
         }
 
         // The provenance sentence, for export chrome (frames read this key).
-        let mut export_sentence = self
+        // The sentence itself now names the strategy that played (§10), so
+        // there is nothing to append: what a chart carries is the same
+        // sentence a person can paste back.
+        let export_sentence = self
             .provenance_config()
             .map(|c| sentence::render_text(&c))
             .unwrap_or_else(|| sentence::render_text(&self.cfg));
-        // A chart exported from a strategy run must not carry a sentence
-        // describing the bet rail. The sentence codec stays untouched — it
-        // is the save format and round-trips — so the statement is appended
-        // at the point of display, where §10's by-reference form will
-        // replace it when the strategy library lands.
-        if let Some(label) = self.live_player_label() {
-            export_sentence = format!("{export_sentence} · playing \"{label}\"");
-        }
         ctx.data_mut(|d| {
             d.insert_temp(egui::Id::new("scenario_sentence"), export_sentence);
         });

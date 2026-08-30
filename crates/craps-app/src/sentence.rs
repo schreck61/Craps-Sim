@@ -38,6 +38,7 @@ pub enum FragmentId {
     Props,
     TableMax,
     Engine,
+    Strategy,
 }
 
 /// One rendered piece of the sentence. `frag: Some(..)` marks a bold,
@@ -88,12 +89,21 @@ pub fn render_spans(cfg: &SimConfig, provenance: Option<&SimConfig>) -> Vec<Span
         frag(FragmentId::Tables, tables_text(cfg)),
     ];
 
-    let mut tail: Vec<(FragmentId, String)> = vec![
-        (FragmentId::Bets, bets_text(cfg)),
-        (
-            FragmentId::Progression,
-            progression_word(cfg.sel.progression).to_owned(),
-        ),
+    // A strategy replaces the bets and the progression rather than joining
+    // them: describing a bet rail that is not in play, beside the strategy
+    // that is, would be the sentence contradicting itself.
+    let mut tail: Vec<(FragmentId, String)> = if let Some(r) = &cfg.strategy {
+        vec![(FragmentId::Strategy, strategy_text(cfg, r))]
+    } else {
+        vec![
+            (FragmentId::Bets, bets_text(cfg)),
+            (
+                FragmentId::Progression,
+                progression_word(cfg.sel.progression).to_owned(),
+            ),
+        ]
+    };
+    let mut rest: Vec<(FragmentId, String)> = vec![
         (FragmentId::Quit, quit_text(cfg)),
         (
             FragmentId::Horizon,
@@ -115,6 +125,7 @@ pub fn render_spans(cfg: &SimConfig, provenance: Option<&SimConfig>) -> Vec<Span
             ),
         ),
     ];
+    tail.append(&mut rest);
     if cfg.come_odds_work_on_comeout {
         tail.push((
             FragmentId::ComeOddsComeout,
@@ -160,8 +171,26 @@ pub fn parse(text: &str) -> Result<SimConfig, String> {
 
     let (budget_cents, table_mins_cents) =
         parse_budget_tables(take(&chunks, &mut at, "budget and tables")?)?;
-    let (mut sel, odds_policy) = parse_bets(take(&chunks, &mut at, "bets")?)?;
-    sel.progression = parse_progression(take(&chunks, &mut at, "progression")?)?;
+    // A strategy stands where the bets and the progression would be.
+    let mut strategy = None;
+    let (mut sel, odds_policy) = if chunks.get(at).is_some_and(|c| c.starts_with("playing")) {
+        let (r, odds) = parse_strategy(chunks[at])?;
+        strategy = Some(r);
+        at += 1;
+        (
+            BetSelection {
+                pass_line: false,
+                ..Default::default()
+            },
+            odds,
+        )
+    } else {
+        let (sel, odds) = parse_bets(take(&chunks, &mut at, "bets")?)?;
+        (sel, odds)
+    };
+    if strategy.is_none() {
+        sel.progression = parse_progression(take(&chunks, &mut at, "progression")?)?;
+    }
     let quit_mult = parse_quit(take(&chunks, &mut at, "quit rule")?)?;
     let (target_hours, rolls_per_hour) = parse_horizon(take(&chunks, &mut at, "horizon")?)?;
     let field_12_triple = parse_field12(take(&chunks, &mut at, "field-12 rule")?)?;
@@ -189,6 +218,7 @@ pub fn parse(text: &str) -> Result<SimConfig, String> {
         table_mins_cents,
         max_rolls,
         sel,
+        strategy,
         odds_policy,
         field_12_triple,
         come_odds_work_on_comeout,
@@ -200,6 +230,20 @@ pub fn parse(text: &str) -> Result<SimConfig, String> {
 }
 
 // --- rendering helpers ---------------------------------------------------
+
+/// `playing "44 Inside" #9f3c at 3-4-5× odds` — §10's by-reference form.
+///
+/// The odds policy rides along because it is a table rule the strategy's
+/// own `max` reads, and with a strategy playing there is no bet-rail
+/// fragment left to carry it.
+fn strategy_text(cfg: &SimConfig, r: &crate::config::StrategyRef) -> String {
+    format!(
+        "playing \"{}\" #{} at {} odds",
+        r.name,
+        r.short(),
+        odds_word(cfg.odds_policy)
+    )
+}
 
 fn tables_text(cfg: &SimConfig) -> String {
     match cfg.table_mins_cents.as_slice() {
@@ -335,6 +379,7 @@ fn fragment_differs(id: FragmentId, a: &SimConfig, b: &SimConfig) -> bool {
         FragmentId::ComeOddsComeout => a.come_odds_work_on_comeout != b.come_odds_work_on_comeout,
         FragmentId::Props => a.prop_bet_cents != b.prop_bet_cents,
         FragmentId::TableMax => a.table_max_mult != b.table_max_mult,
+        FragmentId::Strategy => a.strategy != b.strategy || a.odds_policy != b.odds_policy,
         FragmentId::Engine => {
             a.sessions != b.sessions
                 || a.max_rolls != b.max_rolls
@@ -375,7 +420,20 @@ fn bets_differ(a: &SimConfig, b: &SimConfig) -> bool {
 /// `’`→`'`, and collapse every whitespace run to one plain space.
 fn normalize(text: &str) -> String {
     let mut flat = String::with_capacity(text.len());
+    // A quoted span is a name the user chose — a strategy's, which is also
+    // its file name. Everything else is vocabulary this parser owns and may
+    // fold; inside quotes it owns nothing and folds nothing.
+    let mut in_quotes = false;
     for ch in text.chars() {
+        if ch == '"' {
+            in_quotes = !in_quotes;
+            flat.push(ch);
+            continue;
+        }
+        if in_quotes {
+            flat.push(ch);
+            continue;
+        }
         match ch {
             THIN_SPACE => {}
             MINUS => flat.push('-'),
@@ -550,6 +608,42 @@ fn parse_bets(chunk: &str) -> Result<(BetSelection, OddsPolicy), String> {
     Ok((sel, policy))
 }
 
+/// `playing "name" #9f3c`.
+fn parse_strategy(chunk: &str) -> Result<(crate::config::StrategyRef, OddsPolicy), String> {
+    let rest = chunk
+        .strip_prefix("playing")
+        .ok_or_else(|| format!("expected a strategy, found '{chunk}'"))?
+        .trim();
+    // `… #9f3c at 3-4-5× odds`
+    let (rest, odds) = match rest.rsplit_once(" at ") {
+        Some((head, tail)) => (
+            head.trim(),
+            // `parse_odds` reads the whole "3-4-5x odds" phrase.
+            parse_odds(tail.trim())?,
+        ),
+        None => (rest, OddsPolicy::X345),
+    };
+    let (name, tail) = match rest.strip_prefix('"') {
+        Some(r) => r
+            .split_once('"')
+            .ok_or_else(|| format!("the strategy name is not closed in '{chunk}'"))?,
+        None => rest
+            .split_once('#')
+            .map(|(n, h)| (n.trim(), h))
+            .ok_or_else(|| format!("expected a strategy name in '{chunk}'"))?,
+    };
+    let hex = tail.trim().trim_start_matches('#').trim();
+    let hash =
+        u32::from_str_radix(hex, 16).map_err(|_| format!("'{hex}' is not a strategy hash"))?;
+    Ok((
+        crate::config::StrategyRef {
+            name: name.to_owned(),
+            hash,
+        },
+        odds,
+    ))
+}
+
 fn parse_odds(s: &str) -> Result<OddsPolicy, String> {
     let mult = s
         .strip_suffix("odds")
@@ -702,10 +796,16 @@ mod tests {
         }
     }
 
+    /// The law, stated over the scenario rather than over every field of
+    /// the struct: when a strategy is the player, the bet rail is leftover
+    /// interface state that the sentence deliberately does not carry, so
+    /// the thing that must survive is [`SimConfig::canonical`].
     fn round_trip(cfg: &SimConfig) {
         let text = render_text(cfg);
         let back = parse(&text).unwrap_or_else(|e| panic!("parse failed on '{text}': {e}"));
-        assert_eq!(&back, cfg, "round-trip mismatch for '{text}'");
+        assert_eq!(back, cfg.canonical(), "round-trip mismatch for '{text}'");
+        // And rendering is idempotent, so a saved sentence does not churn.
+        assert_eq!(render_text(&back), text);
     }
 
     fn varied(i: usize, lcg: &mut Lcg) -> SimConfig {
@@ -743,6 +843,17 @@ mod tests {
             confidence: CONF[(i / 3) % 3],
             table_mins_cents: mins,
             max_rolls: CAPS[(i / 2) % 3],
+            // Every third case plays a strategy instead of a bet rail, so
+            // the by-reference form is under the same law as everything
+            // else the sentence carries.
+            strategy: if i.is_multiple_of(3) {
+                Some(crate::config::StrategyRef {
+                    name: format!("saved {i}"),
+                    hash: (i as u32).wrapping_mul(0x9E37_79B9),
+                })
+            } else {
+                None
+            },
             sel: BetSelection {
                 pass_line: lcg.flag(),
                 dont_pass: lcg.flag(),
@@ -986,6 +1097,29 @@ mod tests {
             .expect("come-out fragment renders when true");
         assert_eq!(comeout.text, "come odds work on come-out");
         assert!(comeout.stale);
+    }
+
+    /// What a strategy scenario reads like, pinned so the by-reference form
+    /// stays legible prose and not an identifier soup.
+    #[test]
+    fn a_strategy_sentence_names_the_strategy_and_its_hash() {
+        let cfg = SimConfig {
+            strategy: Some(crate::config::StrategyRef {
+                name: "44 Inside, regressed".into(),
+                hash: 0x9f3c_1a2b,
+            }),
+            ..Default::default()
+        };
+        let text = render_text(&cfg);
+        assert!(
+            text.contains("playing \"44 Inside, regressed\" #9f3c1a2b at 3-4-5× odds"),
+            "{text}"
+        );
+        // And no bet rail: describing bets that are not in play, beside the
+        // strategy that is, would be the sentence contradicting itself.
+        assert!(!text.contains("pass ·"), "{text}");
+        assert_eq!(parse(&text).unwrap(), cfg.canonical());
+        println!("\n{text}\n");
     }
 
     #[test]

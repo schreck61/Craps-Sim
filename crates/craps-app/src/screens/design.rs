@@ -889,8 +889,39 @@ fn paste_sentence(app: &mut App, ui: &mut egui::Ui) {
                         })
                         .collect::<Vec<_>>()
                         .join(", ");
+                    // A sentence that names a strategy has to find it here,
+                    // or say why not. Running the bet rail because the
+                    // strategy could not be resolved would attribute a
+                    // scenario to a player that never played it.
+                    let want = cfg.strategy.clone();
                     app.cfg = cfg;
                     app.error = None;
+                    app.use_strategy = want.is_some();
+                    if let Some(want) = want {
+                        use super::bench::Resolution;
+                        match app.bench.resolve(&want) {
+                            Resolution::Found => {}
+                            Resolution::Changed { got } => {
+                                app.error = Some(format!(
+                                    "This sentence was cut from \"{}\" #{} — \
+                                     the strategy saved here under that name is \
+                                     #{got:08x} now. Its numbers came from rules \
+                                     this machine no longer has.",
+                                    want.name,
+                                    want.short()
+                                ));
+                            }
+                            Resolution::Missing => {
+                                app.error = Some(format!(
+                                    "This sentence plays \"{}\", which is not \
+                                     saved on this machine. Paste the strategy \
+                                     into the Rules tab and save it under that \
+                                     name.",
+                                    want.name
+                                ));
+                            }
+                        }
+                    }
                     ui.ctx().data_mut(|d| d.insert_temp(id, String::new()));
                 }
                 Err(e) => app.error = Some(format!("Couldn't parse that sentence: {e}")),

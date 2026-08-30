@@ -792,6 +792,33 @@ rail says so and the exported provenance says so; a strategy selected but
 not compiled refuses the run rather than falling through. Risk 2's cut line
 ("P0–P4 ship a complete, usable feature") was false until this landed.
 
+**P6 — Library and provenance (4.0 dd). Done.** The Scenario Sentence
+carries a strategy the way §10 designed it: `playing "44 Inside, regressed"
+#9f3c1a2b at 3-4-5× odds`, replacing the bet-rail fragment rather than
+joining it, because describing bets that are not in play beside the strategy
+that is would be the sentence contradicting itself. A pasted sentence
+resolves the reference against the local library and says *found*,
+*changed*, or *missing* — never falling back to the bet rail, which would
+attribute a scenario to a player that never played it.
+
+Three things this forced, each of which was a real defect:
+
+- **The odds policy was gated on a checkbox that is not in play.**
+  `SimConfig::rules` derived it from `sel.take_odds`, so a strategy asking
+  for `max` odds would have been refused at every table where the bet rail
+  happened to have odds switched off.
+- **The bet rail was part of a strategy's scenario when it should not be.**
+  Editing it struck strategy results stale for no reason. `canonical()` now
+  states what the scenario actually is, and the round-trip law is stated
+  over that rather than over every field of the struct.
+- **The sentence lower-cased strategy names.** Names are user-chosen and are
+  also file names; the normalizer now folds everything except what is inside
+  quotes, which is the one part of a sentence whose spelling this parser
+  does not own.
+
+The pinned configuration fingerprint changed, deliberately and for the first
+time: which player is live is part of what a run was cut from.
+
 **P6a — Persistence (2.0 dd). Done.** Pulled forward from P6 for the same
 reason: nothing persisted an authored strategy, so every one written was
 destroyed on quit. A directory of plain-text `.craps` files beside

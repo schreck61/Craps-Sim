@@ -14,6 +14,43 @@ use craps_engine::{
     SweepConfig,
 };
 
+/// A strategy, as a configuration refers to one: by the name it was saved
+/// under and the content hash of its compiled form.
+///
+/// `STRATEGY_DSL.md` §10. The body does not travel in the sentence — a rule
+/// set does not fit in a line of prose, and pretending otherwise would break
+/// the one contract this whole app leans on. The hash is what makes the
+/// reference safe: a pasted sentence naming a strategy this machine has
+/// under that name but with different rules is STALE, loudly, rather than
+/// silently running the wrong player.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StrategyRef {
+    pub name: String,
+    /// The low 32 bits of the compiled program's FNV-1a hash.
+    ///
+    /// Short enough to read off a sentence and compare by eye, which is the
+    /// point of it; long enough that an edited strategy will not collide
+    /// with the one it replaced, which is the job of it. It is stored at the
+    /// width it is written, so what the sentence carries is the whole
+    /// reference and not a truncation of one.
+    pub hash: u32,
+}
+
+impl StrategyRef {
+    /// The hash as the sentence writes it.
+    pub fn short(&self) -> String {
+        format!("{:08x}", self.hash)
+    }
+
+    /// The reference to a compiled program.
+    pub fn of(p: &craps_engine::strategy::Program) -> Self {
+        Self {
+            name: p.name.clone(),
+            hash: p.hash as u32,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SimConfig {
     pub budget_cents: i64,
@@ -28,6 +65,10 @@ pub struct SimConfig {
     pub table_mins_cents: Vec<i64>,
     pub max_rolls: u64,
     pub sel: BetSelection,
+    /// The strategy playing, when one is. `None` means the bet rail above
+    /// is the player, which is what every screen assumed before strategies
+    /// existed and still assumes when this is `None`.
+    pub strategy: Option<StrategyRef>,
     pub odds_policy: OddsPolicy,
     pub field_12_triple: bool,
     pub come_odds_work_on_comeout: bool,
@@ -50,6 +91,7 @@ impl Default for SimConfig {
             table_mins_cents: vec![500, 1000, 1500, 2500, 5000, 10_000],
             max_rolls: 200_000,
             sel: BetSelection::default(),
+            strategy: None,
             odds_policy: OddsPolicy::X345,
             field_12_triple: false,
             come_odds_work_on_comeout: false,
@@ -62,6 +104,23 @@ impl Default for SimConfig {
 }
 
 impl SimConfig {
+    /// The configuration as the scenario it actually describes.
+    ///
+    /// When a strategy is the player, the bet rail is leftover interface
+    /// state and not part of the scenario: the sentence does not carry it,
+    /// changing it must not strike results stale, and two configurations
+    /// differing only there are the same run.
+    pub fn canonical(&self) -> SimConfig {
+        let mut c = self.clone();
+        if c.strategy.is_some() {
+            c.sel = BetSelection {
+                pass_line: false,
+                ..Default::default()
+            };
+        }
+        c
+    }
+
     pub fn horizon_rolls(&self) -> u64 {
         (self.target_hours * self.rolls_per_hour as f64)
             .ceil()
@@ -75,7 +134,11 @@ impl SimConfig {
 
     pub fn rules(&self) -> Rules {
         Rules {
-            odds_policy: if self.sel.take_odds {
+            // `take_odds` is a bet-rail control: it says whether *that*
+            // player backs its line bets. A strategy says so in its own
+            // rules, so gating the table's odds policy on a checkbox that
+            // is not in play would refuse every `max` a strategy asked for.
+            odds_policy: if self.strategy.is_some() || self.sel.take_odds {
                 self.odds_policy
             } else {
                 OddsPolicy::None
@@ -172,26 +235,41 @@ impl SimConfig {
     /// Explorer-only knobs are excluded, so tuning them never marks the main
     /// findings stale (and vice versa via [`Self::explore_fingerprint`]).
     pub fn fingerprint(&self) -> u64 {
+        let this = self.canonical();
+        let self_ = &this;
         let mut f = Fnv::new();
         f.tag(0x01);
-        f.i64(self.budget_cents);
-        match self.quit_mult {
+        f.i64(self_.budget_cents);
+        match self_.quit_mult {
             None => f.tag(0),
             Some(m) => {
                 f.tag(1);
                 f.f64(m);
             }
         }
-        f.u32(self.sessions);
-        f.u32(self.rolls_per_hour);
-        f.f64(self.target_hours);
-        f.f64(self.confidence);
-        f.u64(self.max_rolls);
-        f.tag(self.table_mins_cents.len() as u8);
-        for &m in &self.table_mins_cents {
+        f.u32(self_.sessions);
+        f.u32(self_.rolls_per_hour);
+        f.f64(self_.target_hours);
+        f.f64(self_.confidence);
+        f.u64(self_.max_rolls);
+        f.tag(self_.table_mins_cents.len() as u8);
+        for &m in &self_.table_mins_cents {
             f.i64(m);
         }
-        self.write_shared(&mut f);
+        self_.write_shared(&mut f);
+        // Which player is live is part of what a run was cut from, so a
+        // change of strategy has to strike results stale exactly as a
+        // change of bets does.
+        match &self_.strategy {
+            None => f.tag(0),
+            Some(r) => {
+                f.tag(1);
+                for b in r.name.as_bytes() {
+                    f.tag(*b);
+                }
+                f.u32(r.hash);
+            }
+        }
         f.finish()
     }
 
@@ -363,7 +441,11 @@ mod tests {
         });
         // Cross-platform stability is by construction (explicit LE bytes);
         // pin the actual value so any accidental format change fails loudly.
-        assert_eq!(fp, 12998893547518501123, "fingerprint format changed");
+        // Changed deliberately when the configuration learned which
+        // player is live (STRATEGY_DSL.md §10): a run cut from a strategy
+        // and one cut from the bet rail are different runs, so the
+        // fingerprint has to tell them apart or staleness cannot.
+        assert_eq!(fp, 9031665053774321689, "fingerprint format changed");
     }
 
     #[test]
