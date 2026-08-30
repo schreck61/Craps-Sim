@@ -15,6 +15,7 @@ mod prefs;
 mod screens;
 mod sentence;
 mod store;
+mod store_strategies;
 mod stream;
 mod tour;
 mod ui;

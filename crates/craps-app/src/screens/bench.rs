@@ -38,6 +38,17 @@ pub struct BenchState {
     pub trace: Option<BenchTrace>,
     /// Playhead in rolls; 0 is the table before the first throw.
     pub position: usize,
+    /// The name this strategy is saved under, and the text it had when it
+    /// was last written or read. Together they answer "is there unsaved
+    /// work here", which is the only thing standing between a user and
+    /// losing what they wrote.
+    pub save_name: String,
+    pub saved_source: Option<String>,
+    /// Saved strategies on disk, refreshed when the panel needs them.
+    pub library: Vec<crate::store_strategies::SavedStrategy>,
+    pub library_loaded: bool,
+    /// The last thing the library did, in words.
+    pub library_note: Option<String>,
     /// Whether the panel starts expanded. It does not, because the Design
     /// screen belongs to the bet rail; the Bench is for when something is
     /// not doing what its author expected.
@@ -54,6 +65,11 @@ impl Default for BenchState {
             error: None,
             trace: None,
             position: 0,
+            save_name: String::new(),
+            saved_source: None,
+            library: Vec::new(),
+            library_loaded: false,
+            library_note: None,
             open: false,
         }
     }
@@ -98,6 +114,57 @@ impl BenchState {
     fn seed(&self) -> u64 {
         self.seed_text.trim().parse().unwrap_or(1)
     }
+
+    /// Whether the editor holds work that is not on disk.
+    pub fn dirty(&self) -> bool {
+        !self.source.trim().is_empty() && self.saved_source.as_deref() != Some(self.source.as_str())
+    }
+
+    pub fn refresh_library(&mut self) {
+        if let Some(dir) = crate::store_strategies::strategies_dir() {
+            self.library = crate::store_strategies::list(&dir);
+        }
+        self.library_loaded = true;
+    }
+
+    /// Write the editor's contents under `save_name`, defaulting to the
+    /// strategy's own declared name so the common case needs no typing.
+    pub fn save(&mut self) {
+        let name = if self.save_name.trim().is_empty() {
+            self.parsed
+                .as_ref()
+                .map(|s| s.name.clone())
+                .unwrap_or_else(|| "untitled".into())
+        } else {
+            self.save_name.trim().to_owned()
+        };
+        let Some(dir) = crate::store_strategies::strategies_dir() else {
+            self.library_note = Some("No place to save on this system.".into());
+            return;
+        };
+        match crate::store_strategies::save(&dir, &name, &self.source) {
+            Ok(_) => {
+                self.save_name = crate::store_strategies::sanitize(&name);
+                self.saved_source = Some(self.source.clone());
+                self.library_note = Some(format!("Saved as \"{}\"", self.save_name));
+                self.refresh_library();
+            }
+            Err(e) => self.library_note = Some(e),
+        }
+    }
+
+    pub fn load_from(&mut self, entry: &crate::store_strategies::SavedStrategy) {
+        match crate::store_strategies::load(&entry.path) {
+            Ok(text) => {
+                self.source = text.clone();
+                self.saved_source = Some(text);
+                self.save_name = entry.name.clone();
+                self.library_note = None;
+                self.build();
+            }
+            Err(e) => self.library_note = Some(e),
+        }
+    }
 }
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
@@ -120,6 +187,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         source_box(app, ui);
         ui.add_space(6.0);
+        library_row(app, ui);
+        ui.add_space(6.0);
         controls(app, ui);
         ui.add_space(6.0);
         status(app, ui);
@@ -133,6 +202,103 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             });
         }
     });
+}
+
+/// Save, load, and delete. A strategy the user wrote and cannot get back is
+/// worse than one they never wrote, so this row exists before the editor
+/// does.
+fn library_row(app: &mut App, ui: &mut egui::Ui) {
+    let t = app.theme.clone();
+    if !app.bench.library_loaded {
+        app.bench.refresh_library();
+    }
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("saved as")
+                .font(FontId::new(type_scale::CAPTION, theme::sans()))
+                .color(t.ink2),
+        );
+        ui.add(
+            egui::TextEdit::singleline(&mut app.bench.save_name)
+                .desired_width(170.0)
+                .hint_text("name")
+                .font(FontId::new(type_scale::CAPTION, theme::mono())),
+        );
+        let has_source = !app.bench.source.trim().is_empty();
+        if ui
+            .add_enabled(has_source, egui::Button::new("Save"))
+            .clicked()
+        {
+            app.bench.save();
+        }
+
+        let entries = app.bench.library.clone();
+        let current = if app.bench.save_name.is_empty() {
+            "Open…".to_owned()
+        } else {
+            app.bench.save_name.clone()
+        };
+        egui::ComboBox::from_id_salt("bench_library")
+            .selected_text(current)
+            .show_ui(ui, |ui| {
+                for e in &entries {
+                    if ui.selectable_label(false, &e.name).clicked() {
+                        app.bench.load_from(e);
+                    }
+                }
+                if entries.is_empty() {
+                    ui.label(
+                        RichText::new("nothing saved yet")
+                            .font(FontId::new(type_scale::CAPTION, theme::sans()))
+                            .color(t.ink2),
+                    );
+                }
+            });
+
+        // Deleting is the one thing here that cannot be undone, so it asks.
+        let named = entries
+            .iter()
+            .find(|e| e.name == app.bench.save_name)
+            .cloned();
+        if let Some(entry) = named {
+            let confirm_key = egui::Id::new("bench_delete_armed");
+            let armed: bool = ui.ctx().data(|d| d.get_temp(confirm_key).unwrap_or(false));
+            let label = if armed { "Delete — sure?" } else { "Delete" };
+            if ui.button(label).clicked() {
+                if armed {
+                    match crate::store_strategies::delete(&entry.path) {
+                        Ok(()) => {
+                            app.bench.library_note = Some(format!("Deleted \"{}\"", entry.name));
+                            app.bench.saved_source = None;
+                            app.bench.refresh_library();
+                        }
+                        Err(e) => app.bench.library_note = Some(e),
+                    }
+                    ui.ctx().data_mut(|d| d.insert_temp(confirm_key, false));
+                } else {
+                    ui.ctx().data_mut(|d| d.insert_temp(confirm_key, true));
+                }
+            }
+        }
+
+        if app.bench.dirty() {
+            // Not amber: amber is reserved for statements about whether a
+            // number can be trusted (STALE, PARTIAL). Unsaved work is a
+            // fact about the file, not about the arithmetic.
+            ui.label(
+                RichText::new("• unsaved")
+                    .font(FontId::new(type_scale::CAPTION, theme::sans()))
+                    .color(t.ink),
+            );
+        }
+    });
+    if let Some(note) = &app.bench.library_note {
+        ui.label(
+            RichText::new(note)
+                .font(FontId::new(type_scale::CAPTION, theme::sans()))
+                .color(t.ink2),
+        );
+    }
 }
 
 fn source_box(app: &mut App, ui: &mut egui::Ui) {
@@ -540,6 +706,41 @@ mod tests {
         assert_eq!(b.position, total, "cannot step past the last roll");
         b.step(-1);
         assert_eq!(b.position, total - 1);
+    }
+
+    #[test]
+    fn unsaved_work_is_visible_and_saving_settles_it() {
+        let dir = std::env::temp_dir().join("craps-bench-dirty-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let src = "strategy \"Mine\" language 1\non come-out:\n    bet pass\n";
+
+        let mut b = from_source(src.into());
+        assert!(b.dirty(), "typed but never saved");
+
+        // Saving through the store settles it; editing dirties it again.
+        crate::store_strategies::save(&dir, "Mine", &b.source).unwrap();
+        b.saved_source = Some(b.source.clone());
+        assert!(!b.dirty());
+        b.source.push_str("\non seven-out:\n    leave\n");
+        assert!(b.dirty(), "edited after saving");
+
+        // Reading it back settles it and restores the name.
+        let entry = crate::store_strategies::list(&dir)
+            .into_iter()
+            .next()
+            .unwrap();
+        b.load_from(&entry);
+        assert!(!b.dirty());
+        assert_eq!(b.save_name, "Mine");
+        assert_eq!(b.source, src);
+        assert!(b.program.is_some(), "loading compiles what it read");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_empty_editor_is_not_unsaved_work() {
+        let b = BenchState::default();
+        assert!(!b.dirty(), "nothing typed is nothing to lose");
     }
 
     /// Editing the source retires the ledger. A trace from a strategy that

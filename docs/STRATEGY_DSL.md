@@ -703,10 +703,17 @@ rail says so and the exported provenance says so; a strategy selected but
 not compiled refuses the run rather than falling through. Risk 2's cut line
 ("P0–P4 ship a complete, usable feature") was false until this landed.
 
-**P6a — Persistence (2.0 dd).** Pulled forward from P6 for the same reason:
-nothing persists an authored strategy, so every one written is destroyed on
-quit. A feature that discards the user's work cannot ship, whatever else is
-true of it.
+**P6a — Persistence (2.0 dd). Done.** Pulled forward from P6 for the same
+reason: nothing persisted an authored strategy, so every one written was
+destroyed on quit. A directory of plain-text `.craps` files beside
+`prefs.txt` — the text form is already the serialization, so there is
+nothing here for serde to do — with save, open, and a delete that asks
+first. An editor holding work that is not on disk says so.
+
+What this deliberately leaves for P6 proper is §10's by-reference form: the
+Scenario Sentence does not yet carry a strategy's name and hash. That
+touches the sentence codec and its round-trip law, and belongs with the
+provenance story rather than riding along with a file store.
 
 **P5 — The rule editor (10.0 dd).** Typed-slot rows, prose rendering,
 drag-reorder, the static checks of §9 wired into the existing order-ticket
