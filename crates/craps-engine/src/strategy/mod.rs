@@ -13,13 +13,17 @@
 //!
 //! Design and roadmap: [`STRATEGY_DSL.md`](../../../docs/STRATEGY_DSL.md).
 
+// The curated `pub use` list below is the surface; the modules behind it are
+// not. `Op`, `Guard`, `TriggerTest` and the proposal buffer are interpreter
+// internals whose shape is load-bearing — the program identity hash is taken
+// over them — and nothing outside this crate has business naming them.
 pub mod action;
 pub mod ast;
 pub mod bench;
 pub mod compile;
 pub mod examples;
 pub mod library;
-pub mod player;
+pub(crate) mod player;
 pub mod program;
 pub mod text;
 pub mod view;

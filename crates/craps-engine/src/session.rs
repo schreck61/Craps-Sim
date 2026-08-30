@@ -288,10 +288,11 @@ pub(crate) fn run_with_player<O: RollObserver, P: Player>(
 /// The session is otherwise identical: same seed formula, same ruin rule,
 /// same horizon freeze, same take-profit rule. Only the player differs.
 ///
-/// A compiled program carries its own pressing as rules, so the session runs
-/// with the built-in progression machinery idle — the flat selection passed
-/// here exists because [`Session`] still holds the checkbox player's
-/// configuration, and is never read by a compiled player.
+/// A compiled program declares its pressing per stream, and that machinery
+/// is exactly what executes it — a progression sets the stake where the bet
+/// resolves, and a rule may override it at the decision point. The flat
+/// selection passed here exists because [`Session`] still holds the checkbox
+/// player's configuration, and is never read by a compiled player.
 #[allow(clippy::too_many_arguments)]
 pub fn run_program_session(
     program: &Program,
@@ -979,13 +980,11 @@ mod bench {
     /// figures and the budget they justify are in STRATEGY_DSL.md Part II
     /// §3; this asserts only the regression tripwire.
     ///
-    /// Cost is nanoseconds *per simulated roll*, not per session. The two
-    /// players must not be assumed to live the same length of session — the
-    /// pressed configuration does not, because `from_selection` compiles the
-    /// bets and not yet the progression, so the compiled player there plays
-    /// flat and survives far longer. Comparing seconds-per-session across
-    /// that would report a 12x slowdown that is really a 10x difference in
-    /// work done, which is how this benchmark read before it was fixed.
+    /// Cost is nanoseconds *per simulated roll*, not per session, because
+    /// the two players must not be assumed to live the same length of
+    /// session. Comparing seconds-per-session would report a slowdown that
+    /// is really a difference in work done, which is how this benchmark read
+    /// before it was fixed.
     ///
     ///   cargo test --release -p craps-engine -- --ignored bench_compiled --nocapture
     #[test]

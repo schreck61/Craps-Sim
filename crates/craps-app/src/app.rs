@@ -170,7 +170,7 @@ impl App {
         if !self.use_strategy {
             return None;
         }
-        self.bench.program.clone().map(std::sync::Arc::new)
+        self.bench.program.clone()
     }
 
     /// What is playing, in the words the rail and the baseline use.

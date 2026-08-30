@@ -498,3 +498,60 @@ fn hash_program(
     }
     h
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::strategy::parse;
+
+    /// A strategy's identity is pinned to a value, not just to itself.
+    ///
+    /// The hash is taken over `Debug` formatting of the compiled ops, which
+    /// is stable for plain data enums but is coupled to how their variants
+    /// and fields are *spelled*. A rename that changes nothing about what a
+    /// strategy does would re-key every saved one, turning every Scenario
+    /// Sentence in the wild STALE against a strategy that had not changed —
+    /// silently, since nothing compared the hash to a known answer. This is
+    /// that comparison. If it fails after a refactor, the refactor changed
+    /// what a strategy *is*, and every saved sentence needs to know.
+    #[test]
+    fn the_program_identity_is_pinned_to_a_value() {
+        let s = parse(
+            "strategy \"pinned\" language 1\n\
+             on come-out:\n    bet pass base\n\
+             on roll when point != 0:\n    bet odds on pass max\n",
+        )
+        .unwrap_or_else(|e| panic!("{}", e.message()));
+        let p = compile(&s).unwrap();
+        assert_eq!(
+            p.hash, 0xdc8a_8fff_8cac_ec35,
+            "the compiled identity of a fixed strategy changed; \
+             every saved sentence referring to one now reads STALE"
+        );
+    }
+
+    /// Two strategies that differ only in a name are different strategies,
+    /// and two that differ only in a rule are too. This is the whole job of
+    /// the hash: a sentence can never silently run the wrong player.
+    #[test]
+    fn the_identity_moves_when_the_strategy_does() {
+        let one =
+            compile(&parse("strategy \"a\" language 1\non come-out:\n bet pass base\n").unwrap())
+                .unwrap();
+        let renamed =
+            compile(&parse("strategy \"b\" language 1\non come-out:\n bet pass base\n").unwrap())
+                .unwrap();
+        let rewritten = compile(
+            &parse("strategy \"a\" language 1\non come-out:\n bet dont pass base\n").unwrap(),
+        )
+        .unwrap();
+        let pressed = compile(
+            &parse("strategy \"a\" language 1\npress martingale\non come-out:\n bet pass base\n")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_ne!(one.hash, renamed.hash, "a different name");
+        assert_ne!(one.hash, rewritten.hash, "a different bet");
+        assert_ne!(one.hash, pressed.hash, "a different pressing system");
+    }
+}

@@ -25,7 +25,7 @@ pub struct ReplayState {
     /// The same night with its rules attributed, when a strategy played it.
     /// Everything else on this screen reads `trace`; only the Bench panel
     /// reads this.
-    pub bench: Option<craps_engine::strategy::BenchTrace>,
+    pub bench: Option<std::sync::Arc<craps_engine::strategy::BenchTrace>>,
     pub ghost_trace: Option<SessionTrace>,
     pub session: u64,
     pub min_index: usize,
@@ -148,7 +148,7 @@ impl ReplayState {
                     cfg.horizon_rolls(),
                     s,
                 );
-                (b.as_session_trace(), Some(b))
+                (b.as_session_trace(), Some(std::sync::Arc::new(b)))
             }
             None => (
                 trace_session(

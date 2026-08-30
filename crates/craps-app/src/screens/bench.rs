@@ -56,7 +56,11 @@ pub struct BenchState {
     /// the fastest way to see what the language looks like.
     pub source: String,
     pub parsed: Option<Strategy>,
-    pub program: Option<Program>,
+    /// Behind an `Arc` because the run path, the rail and the export all ask
+    /// for it every frame, and a `Program` is a `Vec<Op>`, a name and
+    /// seventeen progressions — copying that sixty times a second to answer
+    /// "which player is live" is work nobody asked for.
+    pub program: Option<std::sync::Arc<Program>>,
     /// Why the source could not be read or compiled, in the words the
     /// author needs — never a red outline alone.
     pub error: Option<String>,
@@ -94,7 +98,7 @@ impl BenchState {
                 Ok(p) => {
                     self.error = None;
                     self.parsed = Some(s);
-                    self.program = Some(p);
+                    self.program = Some(std::sync::Arc::new(p));
                 }
             },
         }
@@ -453,6 +457,9 @@ fn status(app: &App, ui: &mut egui::Ui) {
 
 /// The ledger half, on the Replay screen. `position` is Replay's playhead.
 pub fn ledger(app: &mut App, ui: &mut egui::Ui, position: usize) {
+    // An `Arc` clone rather than the whole night: this runs every frame the
+    // Replay screen is showing a strategy, and a `BenchTrace` owns two
+    // vectors per roll.
     let Some(trace) = app.replay.bench.clone() else {
         return;
     };
@@ -473,11 +480,18 @@ fn run_conditions(app: &App, ui: &mut egui::Ui, trace: &BenchTrace) {
     let t = app.theme.clone();
     let cfg = app.replay.config.clone().unwrap_or_else(|| app.cfg.clone());
     let min = app.replay.min_cents;
+    // The reference the sentence carries, spelled the way the sentence
+    // spells it. This printed four hex digits of a hash the rest of the app
+    // prints eight of, so a reader checking a benched night against its own
+    // sentence had to know one was a truncation of the other.
     let name = app
         .bench
         .program
         .as_ref()
-        .map(|p| format!("{} #{:04x}", p.name, p.hash & 0xffff))
+        .map(|p| {
+            let r = crate::config::StrategyRef::of(p);
+            format!("{} #{}", r.name, r.short())
+        })
         .unwrap_or_else(|| "strategy".into());
     ui.label(
         RichText::new(format!(

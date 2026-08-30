@@ -45,6 +45,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A strategy can no longer quietly play something other than what it
+  says.** A review of the language ([STRATEGY_DSL_REVIEW.md](docs/STRATEGY_DSL_REVIEW.md))
+  found that its worst faults were all silent ones, which is the single
+  thing the design set out to prevent:
+  - A named stake below the table minimum was accepted. `bet pass 12` — a
+    bare number is cents — rode for twelve cents through three hundred rolls
+    without one refusal. Sub-minimum stakes are refused now, oversized ones
+    are clipped with the event that says so, and money renders back as money
+    rather than as the cent count it became.
+  - **Presses could not climb.** A progression re-prices a bet where it
+    resolves, so a rule pressing at the decision point was undone by the
+    very win it was riding, and `press place 6 to stake(place 6) * 2`
+    recomputed twice-the-base forever. Every press-and-ride ladder in craps
+    was unreachable, including the one the shipped example's own prose
+    describes. A rule that names a figure now tells the bet's stream what
+    the bet is worth.
+  - `on session-start` parsed, compiled, and appeared first in the editor's
+    trigger list. Nothing ever set its bit, so every rule written on it did
+    nothing. `var mult = 1` parsed an initializer and discarded it. Both are
+    honoured now.
+  - `place 260` wrapped into a legal place 4 and `total(263)` into a trigger
+    that fired on every seven. Out-of-range numbers are refused, and the
+    message names the number rather than the word after it.
+  - Odds references silently meant the flat behind them in win/loss
+    triggers, history reads, and pressing declarations. The grammar no
+    longer draws a distinction the engine does not have.
+  - A `for each` block whose body touched memory dissolved into copies on
+    the first save, comments and all.
+  - "Not allowed right now" covered three different rules of craps; it names
+    which one now. A press in the wrong direction was the only refusal in
+    the language that emitted nothing.
+- **Two ways to crash the app from pasted text.** The expression parser
+  recursed without a depth limit, so a few thousand parentheses overflowed
+  the stack — the test written to prove malformed input is never fatal was
+  itself crashing the engine's test suite. And `i64::MIN / -1` panics in
+  every build profile, from constants any strategy can write, on every core
+  at once. Nesting is bounded and division saturates.
+- The Explorer indexed the curated eleven with the sentinel that marks an
+  authored strategy — a panic waiting for one to rank. It gets a lane of its
+  own, and reports no edge rather than an invented one.
+- Pasting a Scenario Sentence could not then be run: validation still asked
+  the bet rail for bets, which a strategy sentence deliberately blanks. It
+  also opened over unsaved editor work without asking, and could not find a
+  strategy whose name contained a character the file store rewrites.
 - The odds policy was derived from the bet rail's own `take/lay odds`
   checkbox, so a strategy asking for maximum odds would have been refused at
   any table where that box happened to be unticked.
@@ -60,6 +104,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `BetEventKind::Won` records whether the stake came back, which a ledger
   needs in order to account for the rail. Place and hardway winners stay up;
   everything else returns.
+- **The two proofs the language leans on now run in CI.** The
+  ten-thousand-seed equivalence battery — the hand-written player and the
+  compiled one pinned to each other on identical dice — and the performance
+  budget were both marked ignored and in no job, which left the whole
+  argument for keeping two player implementations enforced by nobody. Both
+  halves of the budget are asserted; the smaller half is 2.5× rather than
+  the 2× first written, because the nine-rule 3-Point Molly has measured
+  above 2× since the day it was first benchmarked and a budget contradicted
+  by the table printed beside it is not a budget.
 
 ## [0.4.3] - 2026-08-24
 
