@@ -405,16 +405,25 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                         Direction::Up => target <= cur,
                         Direction::Down => target >= cur,
                     };
+                    let verb = match dir {
+                        Direction::Up => crate::trace::Attempted::Press,
+                        Direction::Down => crate::trace::Attempted::Regress,
+                    };
                     if wrong_way {
                         // Refused, and said so. This was the one refusal in
                         // the language that emitted nothing, which left a
                         // rule visibly firing in the Bench beside a layout
                         // that never moved and no reason given — exactly the
                         // silence Principle 4 exists to forbid.
-                        let _ = self.reject(b, crate::strategy::RejectReason::WrongDirection);
+                        let _ = self.reject_asking(
+                            b,
+                            verb,
+                            target,
+                            crate::strategy::RejectReason::WrongDirection,
+                        );
                         continue;
                     }
-                    Action::SetStake(b, a)
+                    Action::SetStake(b, a, verb)
                 }
             };
             let _ = self.apply(action);

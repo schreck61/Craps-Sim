@@ -5,6 +5,39 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-08-30
+
+### Fixed
+
+Three defects found by reading the shipped examples back after 0.5.0 — which
+is the right place to have looked first, since an example is where somebody
+meets this language.
+
+- **A pressed place bet climbed without limit.** "Press twice, then collect"
+  presses on a number's first two hits and regresses after; instead the stake
+  ratcheted past $384. Making a decision-point press survive the next
+  resolution had been done by writing the rule's figure into the bet's
+  pressing stream, and that level then outlived the bet it belonged to: a
+  seven-out took the bet, the next roll put a fresh one up at the base stake,
+  and resolution topped it straight back to the stale level — from which the
+  rule pressed again. A flat stream does not re-price a winner at all now,
+  which is what "flat" meant before anyone wrote it down. Only strategies
+  that press from a rule were affected; the checkbox player and every
+  progression are unchanged, and the pinned outcomes confirm it.
+- **"The field is due" bet after one field number, not two.** A decision
+  point comes before every roll including the session's first, where the last
+  total reads 0 — and 0 is under 4, so a condition written as
+  `last-total <= 4` counted a field number that had not happened. The
+  superstition was being modelled one roll more eagerly than the superstition
+  itself, in the example whose whole job is to be faithful to a belief so the
+  app can refute it.
+- **A condition shown as text named memory by its slot index.** A condition
+  the typed rows cannot take apart is displayed as its own text — and that
+  fallback was rendering `var0 >= 2` where the strategy says `streak >= 2`,
+  naming something that appears nowhere in the strategy. The statement rows
+  directly above it had the names all along.
+- A refused `regress` reported itself as a refused bet in the ledger.
+
 ## [0.5.0] - 2026-08-30
 
 ### Added

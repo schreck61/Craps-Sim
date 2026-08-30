@@ -866,6 +866,19 @@ superstitious.
 The thing that could not be said before: a bet whose size depends on how
 many times its own number has come.
 
+*And for two milestones it did not climb, and then it climbed too far.*
+A progression re-prices its bet where the bet resolves, and a flat stream
+re-priced it back to base — so every press was torn down by the very win
+it was riding. Fixing that by writing the rule's figure into the stream
+then let a pressed level outlive the bet it belonged to: a seven-out took
+the bet, the next roll put a fresh one up at base, and resolution topped
+it straight back to the stale level, from which the rule pressed again.
+The stake ratcheted past $384 with nothing asking it to.
+
+A flat stream does not re-price a winner at all, which is what "flat"
+meant before anyone wrote it down. Two tests hold both ends: one walks
+away once the 6 reaches $24, and one fails if it ever passes it.
+
 ```
 strategy "Press twice, then collect" language 1
 
@@ -885,16 +898,6 @@ for each of 6, 8 as n {
         regress place n to base
 }
 ```
-
-*And for two milestones it did not climb.* A progression re-prices its bet
-where the bet resolves, and the stream still had this one at its base — so
-every press was torn back down by the very win it was riding, and the second
-press recomputed the first one forever. The example was the counterexample to
-its own caption, and nothing said so: the money looked plausible and the rules
-fired. A `press` or `regress` at the decision point now tells that bet's
-stream what the bet is worth from this moment, which is what lets any ladder
-climb at all; §6's interaction is unchanged, and the example is pinned by a
-test that walks away once the 6 stands at $24.
 
 **Off until the shooter proves himself**
 
@@ -948,15 +951,25 @@ Nonsense, faithfully modeled. Principle 5: a language that could only
 express sound play could not refute unsound play, and refutation is the
 product.
 
+The low half of the field is written `last-total >= 2 and last-total <= 4`
+rather than `last-total <= 4`, and the lower bound is load-bearing. A
+decision point comes before every roll including the session's first,
+where `last-total` reads 0 — and 0 is under 4. The shorter condition
+counted a field number that had not happened, so the streak began at one
+and the strategy bet after a single real field number rather than two: a
+superstition modelled one roll more eagerly than the superstition itself.
+Two is not a total the dice can fail to reach, so saying so costs nothing
+and stops the phantom.
+
 ```
 strategy "The field is due" language 1
 
 var streak = 0
 
-on roll when last-total <= 4 or last-total >= 9:
+on roll when last-total >= 2 and last-total <= 4 or last-total >= 9:
     set streak = streak + 1
 
-on roll when not (last-total <= 4 or last-total >= 9):
+on roll when not (last-total >= 2 and last-total <= 4 or last-total >= 9):
     set streak = 0
 
 on roll when streak >= 2:

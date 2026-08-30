@@ -81,7 +81,11 @@ pub enum Action {
     /// bet on the same roll the progression sets the stake first and the
     /// rule overrides it, the same last-write-wins ordering that governs two
     /// rules touching one bet.
-    SetStake(BetRef, Amount),
+    /// The verb rides along because `press` and `regress` are different
+    /// words to the person who wrote them, and a refusal that says "pressing"
+    /// to somebody who typed `regress` is a ledger telling them about a rule
+    /// they do not have.
+    SetStake(BetRef, Amount, Attempted),
     /// Take the bet down; the stake comes back to the rail. Refused for
     /// contract bets, which cannot be removed once the point is on.
     Down(BetRef),
@@ -188,7 +192,7 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
     pub(crate) fn apply(&mut self, action: Action) -> Adjudication {
         match action {
             Action::Bet(bet, amount) => self.apply_rule_bet(bet, amount),
-            Action::SetStake(bet, amount) => self.apply_set_stake(bet, amount),
+            Action::SetStake(bet, amount, verb) => self.apply_set_stake(bet, amount, verb),
             Action::Down(bet) => self.apply_down(bet),
             Action::Working(bet, on, when) => self.apply_working(bet, on, when),
             Action::Leave => {
@@ -201,7 +205,7 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
     /// Move a working bet to a new stake. Raising takes the difference from
     /// the rail; lowering returns it.
     #[inline(never)]
-    fn apply_set_stake(&mut self, bet: BetRef, amount: Amount) -> Adjudication {
+    fn apply_set_stake(&mut self, bet: BetRef, amount: Amount, verb: Attempted) -> Adjudication {
         if is_odds(bet) {
             // Odds already top up toward a target, which is the same thing.
             return self.apply_bet(bet, amount);
@@ -209,7 +213,7 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
         let asked = asked_cents(amount);
         let spec = match self.flat_spec(bet) {
             Ok(s) => s,
-            Err(r) => return self.reject_asking(bet, Attempted::Press, asked, r),
+            Err(r) => return self.reject_asking(bet, verb, asked, r),
         };
         let cur = *self.slot(spec.slot);
         if cur == 0 {
@@ -219,24 +223,27 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
             Amount::Pressed => self.pressed_stake(bet, spec.base),
             other => match self.resolve_amount(bet, other, spec.base) {
                 Ok(v) => v,
-                Err(r) => return self.reject_asking(bet, Attempted::Press, asked, r),
+                Err(r) => return self.reject_asking(bet, verb, asked, r),
             },
         };
         // A stake below the table's own minimum for this bet is not a stake;
         // a player who wants nothing there takes it down.
         let want = want.max(spec.base);
-        // `pressed` is the stream's own answer, so it neither needs holding
-        // to the table again nor has anything to tell the stream. Every other
-        // amount is the rule naming a figure, and the stream is told: without
-        // that, the progression re-prices the bet at the next resolution and
-        // the press is undone by the very win it was riding — which is why no
-        // ladder could ever climb.
+        // `pressed` is the stream's own answer and needs no holding to the
+        // table again. Every other amount is a figure the rule named.
+        //
+        // Nothing is written back to the stream. An earlier version did, so
+        // that a flat progression would not re-price the bet at the next
+        // resolution — and a pressed level then outlived the bet it belonged
+        // to: a seven-out took the bet, `bet place 6 base` put a fresh one up,
+        // and the next resolution topped it straight back to the stale level.
+        // The stake ratcheted with nothing asking it to. A flat stream simply
+        // does not re-price a winner now, which is what "flat" meant all
+        // along.
         let want = if matches!(amount, Amount::Pressed) {
             want
         } else {
-            let want = self.clip_to_table_max(bet, want, spec.base);
-            self.set_stream_stake(bet, want);
-            want
+            self.clip_to_table_max(bet, want, spec.base)
         };
         if want > cur {
             match self.try_stake(want - cur) {
@@ -245,12 +252,9 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                     self.emit(bet_kind(bet), BetEventKind::Placed, a);
                     Ok(a)
                 }
-                None => self.reject_asking(
-                    bet,
-                    Attempted::Press,
-                    want - cur,
-                    RejectReason::InsufficientBankroll,
-                ),
+                None => {
+                    self.reject_asking(bet, verb, want - cur, RejectReason::InsufficientBankroll)
+                }
             }
         } else if want < cur {
             let back = cur - want;
@@ -437,12 +441,7 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
         // one — which is what the equivalence battery is watching for.
         let named = matches!(amount, Amount::Cents(_) | Amount::Units(_));
         let want = if shape && named {
-            let want = self.clip_to_table_max(bet, want, spec.base);
-            // A rule that names its own figure has said what this bet is
-            // worth from now on; the stream is told, so the progression does
-            // not re-price it back at the next resolution.
-            self.set_stream_stake(bet, want);
-            want
+            self.clip_to_table_max(bet, want, spec.base)
         } else {
             want
         };
@@ -825,45 +824,6 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
         want
     }
 
-    /// Tell this bet's progression stream what the bet is worth now.
-    ///
-    /// A rule acting at the decision point and a progression acting at
-    /// resolution are two hands on the same bet. Without this the
-    /// progression wins every argument: it re-prices the bet from its own
-    /// stake on the next win, so a press that raised the felt is torn back
-    /// down by the very hit it was riding, and no ladder can ever climb.
-    /// Odds have no stream of their own — they top up toward a target the
-    /// flat decides — so they are left alone.
-    fn set_stream_stake(&mut self, bet: BetRef, stake: i64) {
-        let st = match bet {
-            BetRef::Pass => &mut self.p_pass,
-            BetRef::DontPass => &mut self.p_dont,
-            BetRef::Come => &mut self.p_come,
-            BetRef::DontCome => &mut self.p_dc,
-            BetRef::Field => &mut self.p_field,
-            BetRef::AnySeven => &mut self.p_any7,
-            BetRef::AnyCraps => &mut self.p_anycraps,
-            BetRef::Place(n) => match place_index(n) {
-                Some(i) => &mut self.p_place[i],
-                None => return,
-            },
-            BetRef::Hardway(n) => match hard_index(n) {
-                Some(i) => &mut self.p_hard[i],
-                None => return,
-            },
-            BetRef::PassOdds
-            | BetRef::DontPassLay
-            | BetRef::ComeOdds(_)
-            | BetRef::DontComeLay(_) => return,
-        };
-        st.stake = stake;
-    }
-
-    /// Refuse, and say what was being attempted and for how much.
-    ///
-    /// `asked` is the stake the strategy wanted, not the zero it ended up
-    /// with — a refusal that reports nothing costs the reader the one number
-    /// that would have told them which rule they are looking at.
     #[inline]
     pub(crate) fn reject_asking(
         &mut self,
@@ -992,7 +952,11 @@ mod tests {
         let mut t = table(&sel, &r, 100_000);
         let _ = t.apply(Action::Bet(BetRef::Pass, Amount::Cents(12)));
         t.point = Some(4);
-        let _ = t.apply(Action::SetStake(BetRef::Place(6), Amount::Cents(5000)));
+        let _ = t.apply(Action::SetStake(
+            BetRef::Place(6),
+            Amount::Cents(5000),
+            Attempted::Press,
+        ));
         let _ = t.apply(Action::Down(BetRef::Place(8)));
         let _ = t.apply(Action::Working(
             BetRef::Field,
@@ -1328,7 +1292,11 @@ mod tests {
 
         // Up: the difference comes off the rail.
         assert_eq!(
-            t.apply(Action::SetStake(BetRef::Place(6), Amount::Cents(2400))),
+            t.apply(Action::SetStake(
+                BetRef::Place(6),
+                Amount::Cents(2400),
+                Attempted::Press
+            )),
             Ok(1200)
         );
         assert_eq!(t.place[2], 2400);
@@ -1336,7 +1304,11 @@ mod tests {
 
         // Down: it comes back.
         assert_eq!(
-            t.apply(Action::SetStake(BetRef::Place(6), Amount::Cents(1200))),
+            t.apply(Action::SetStake(
+                BetRef::Place(6),
+                Amount::Cents(1200),
+                Attempted::Regress
+            )),
             Ok(0)
         );
         assert_eq!(t.place[2], 1200);
@@ -1346,7 +1318,11 @@ mod tests {
         // rounded into one it would: a player who wants nothing there takes
         // it down, and the layout does not move meanwhile.
         assert_eq!(
-            t.apply(Action::SetStake(BetRef::Place(6), Amount::Cents(1))),
+            t.apply(Action::SetStake(
+                BetRef::Place(6),
+                Amount::Cents(1),
+                Attempted::Regress
+            )),
             Err(RejectReason::BelowTableMinimum)
         );
         assert_eq!(t.place[2], 1200);

@@ -55,6 +55,19 @@ fn rules() -> Rules {
 ///
 /// The thing that could not be said before: a bet whose size depends on how
 /// many times its own number has come.
+///
+/// *And for two milestones it did not climb, and then it climbed too far.*
+/// A progression re-prices its bet where the bet resolves, and a flat stream
+/// re-priced it back to base — so every press was torn down by the very win
+/// it was riding. Fixing that by writing the rule's figure into the stream
+/// then let a pressed level outlive the bet it belonged to: a seven-out took
+/// the bet, the next roll put a fresh one up at base, and resolution topped
+/// it straight back to the stale level, from which the rule pressed again.
+/// The stake ratcheted past $384 with nothing asking it to.
+///
+/// A flat stream does not re-price a winner at all, which is what "flat"
+/// meant before anyone wrote it down. Two tests hold both ends: one walks
+/// away once the 6 reaches $24, and one fails if it ever passes it.
 pub const PRESS_TWICE: &str = r#"
 strategy "Press twice, then collect" language 1
 
@@ -118,15 +131,25 @@ on roll when profit >= $150 or profit <= -$200:
 /// Nonsense, faithfully modeled. Principle 5: a language that could only
 /// express sound play could not refute unsound play, and refutation is the
 /// product.
+///
+/// The low half of the field is written `last-total >= 2 and last-total <= 4`
+/// rather than `last-total <= 4`, and the lower bound is load-bearing. A
+/// decision point comes before every roll including the session's first,
+/// where `last-total` reads 0 — and 0 is under 4. The shorter condition
+/// counted a field number that had not happened, so the streak began at one
+/// and the strategy bet after a single real field number rather than two: a
+/// superstition modelled one roll more eagerly than the superstition itself.
+/// Two is not a total the dice can fail to reach, so saying so costs nothing
+/// and stops the phantom.
 pub const FIELD_IS_DUE: &str = r#"
 strategy "The field is due" language 1
 
 var streak = 0
 
-on roll when last-total <= 4 or last-total >= 9:
+on roll when last-total >= 2 and last-total <= 4 or last-total >= 9:
     set streak = streak + 1
 
-on roll when not (last-total <= 4 or last-total >= 9):
+on roll when not (last-total >= 2 and last-total <= 4 or last-total >= 9):
     set streak = 0
 
 on roll when streak >= 2:
@@ -209,6 +232,37 @@ mod tests {
         }
     }
 
+    /// *Press each on its first two hits* means two presses, and then no
+    /// more.
+    ///
+    /// It climbed without limit. Making a decision-point press survive the
+    /// next resolution was first done by writing the rule's figure into the
+    /// bet's progression stream — and a pressed level then outlived the bet
+    /// it belonged to. A seven-out took the bet, `bet place n base` put a
+    /// fresh one up, and the next resolution topped it straight back to the
+    /// stale level, from which the rule pressed again. The stake ratcheted
+    /// with nothing asking it to, past $384 within forty sessions.
+    ///
+    /// A flat stream does not re-price a winner at all now, which is what
+    /// "flat" meant before anyone wrote it down.
+    #[test]
+    fn pressing_twice_presses_exactly_twice() {
+        let r = rules();
+        // At a $5 table the 6 takes $6, so two presses stand at $24 and a
+        // third would show at $48.
+        let src = format!(
+            "{PRESS_TWICE}\non roll when stake(place 6) > $24 or stake(place 8) > $24:\n    leave\n"
+        );
+        let p = compile(&parse(&src).unwrap()).unwrap();
+        let over: u32 = (0..40u64)
+            .map(|seed| {
+                crate::strategy::bench_session(&p, &r, 500, 100_000, None, 300, 300, seed)
+                    .fire_counts[p.rule_count() - 1]
+            })
+            .sum();
+        assert_eq!(over, 0, "a bet pressed past its second press");
+    }
+
     /// The prose says *press each on its first two hits*, which means the
     /// bet climbs: base, then twice base, then four times.
     ///
@@ -235,6 +289,38 @@ mod tests {
         assert!(
             climbed > 0,
             "the 6 never reached twice-pressed in forty sessions"
+        );
+    }
+
+    /// The superstition waits for *two* field numbers, not one.
+    ///
+    /// A decision point comes before every roll including the session's
+    /// first, where `last-total` reads 0 — and 0 is under 4, so a condition
+    /// written as `last-total <= 4` counted a field number that had not
+    /// happened. The streak began at one and the example bet after a single
+    /// real field number: a superstition modelled more eagerly than the
+    /// superstition itself, in the one example whose whole job is to be
+    /// faithful to a belief so the app can refute it.
+    #[test]
+    fn the_due_field_waits_for_two_of_them() {
+        // The strategy's own counter, with a tripwire on the phantom: if the
+        // streak is ever above zero before a roll has resolved, the count is
+        // of something that did not happen.
+        let src = FIELD_IS_DUE.replace(
+            "on roll when streak >= 2:\n    bet field base",
+            "on roll when roll == 0 and streak >= 1:\n    leave\n\non roll when streak >= 2:\n    bet field base",
+        );
+        let s = parse(&src).unwrap_or_else(|e| panic!("{}", e.message()));
+        let p = compile(&s).unwrap();
+        let phantom: u32 = (0..40u64)
+            .map(|seed| {
+                crate::strategy::bench_session(&p, &rules(), 500, 100_000, None, 200, 200, seed)
+                    .fire_counts[2]
+            })
+            .sum();
+        assert_eq!(
+            phantom, 0,
+            "the streak counted a field number before any roll had happened"
         );
     }
 

@@ -1,6 +1,6 @@
 [package]
 name = "craps-engine"
-version = "0.5.0"
+version = "0.5.1"
 description = "Deterministic Monte Carlo craps engine"
 edition.workspace = true
 rust-version.workspace = true

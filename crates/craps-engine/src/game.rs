@@ -1075,6 +1075,14 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
             },
             cur,
         );
+        // A flat stream does not re-price a winner. "Flat" means nobody is
+        // pressing this bet — not that the table drags it back to base every
+        // time it wins, which is what re-pricing under Flat amounts to when a
+        // rule has moved the stake. That was how a decision-point press got
+        // torn down by the very win it was riding.
+        if progs[S_PLACE + i] == Progression::Flat {
+            return;
+        }
         let desired = self.prog_place_stake(i);
         if desired > cur {
             if self.try_stake(desired - cur).is_some() {
@@ -1113,6 +1121,9 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
             },
             cur,
         );
+        if progs[S_HARD + i] == Progression::Flat {
+            return;
+        }
         let desired = self.prog_stake(self.p_hard[i].stake, base, BetRef::Hardway(t));
         if desired > cur {
             if self.try_stake(desired - cur).is_some() {
