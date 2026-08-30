@@ -87,9 +87,16 @@ impl SimConfig {
         }
     }
 
-    pub fn to_sweep(&self, base_seed: u64) -> SweepConfig {
+    /// The sweep this configuration describes, played by `program` when a
+    /// strategy is live and by the checkbox selection otherwise.
+    pub fn to_sweep(
+        &self,
+        base_seed: u64,
+        program: Option<std::sync::Arc<craps_engine::strategy::Program>>,
+    ) -> SweepConfig {
         SweepConfig {
             sel: self.sel.clone(),
+            program,
             rules: self.rules(),
             mins: self.table_mins_cents.clone(),
             budget_cents: self.budget_cents,

@@ -18,9 +18,11 @@ use rayon::prelude::*;
 
 use crate::bets::{BetSelection, Progression, Rules};
 use crate::session::{
-    run_drawdown_session, run_horizon_session, run_session, session_seed, SeedPhase,
+    run_drawdown_session, run_horizon_session, run_program_drawdown_session, run_program_session,
+    run_session, session_seed, SeedPhase,
 };
 use crate::stats::{median_ci_sorted, wald_ci_half, Welford};
+use crate::strategy::Program;
 
 /// Bit flags on [`SessionRecord::flags`].
 pub mod record_flags {
@@ -81,6 +83,12 @@ pub struct SweepCtl {
 #[derive(Clone, Debug)]
 pub struct SweepConfig {
     pub sel: BetSelection,
+    /// The compiled strategy to play, when one is live. `None` plays the
+    /// checkbox selection above.
+    ///
+    /// Shared rather than cloned: one program serves every session on every
+    /// thread, and it is immutable once compiled.
+    pub program: Option<std::sync::Arc<Program>>,
     pub rules: Rules,
     /// Table minimums in cents, ascending.
     pub mins: Vec<i64>,
@@ -125,23 +133,51 @@ pub fn run_sweep(cfg: &SweepConfig, tx: SyncSender<Batch>, ctl: &SweepCtl) {
                         partial = true;
                         break;
                     }
-                    let o = run_session(
-                        &cfg.sel,
-                        &cfg.rules,
-                        min,
-                        cfg.budget_cents,
-                        cfg.quit_target_cents,
-                        cfg.max_rolls,
-                        cfg.horizon_rolls,
-                        session_seed(cfg.base_seed, mi as u32, SeedPhase::Main, i),
-                    );
-                    let outlay = run_drawdown_session(
-                        &cfg.sel,
-                        &cfg.rules,
-                        min,
-                        cfg.horizon_rolls,
-                        session_seed(cfg.base_seed, mi as u32, SeedPhase::Drawdown, i),
-                    );
+                    let main_seed = session_seed(cfg.base_seed, mi as u32, SeedPhase::Main, i);
+                    let dd_seed = session_seed(cfg.base_seed, mi as u32, SeedPhase::Drawdown, i);
+                    // One branch per session on a pointer that never changes
+                    // mid-sweep; the dice, the seeds, and everything else
+                    // about the run are identical either way.
+                    let (o, outlay) = match &cfg.program {
+                        Some(p) => (
+                            run_program_session(
+                                p,
+                                &cfg.rules,
+                                min,
+                                cfg.budget_cents,
+                                cfg.quit_target_cents,
+                                cfg.max_rolls,
+                                cfg.horizon_rolls,
+                                main_seed,
+                            ),
+                            run_program_drawdown_session(
+                                p,
+                                &cfg.rules,
+                                min,
+                                cfg.horizon_rolls,
+                                dd_seed,
+                            ),
+                        ),
+                        None => (
+                            run_session(
+                                &cfg.sel,
+                                &cfg.rules,
+                                min,
+                                cfg.budget_cents,
+                                cfg.quit_target_cents,
+                                cfg.max_rolls,
+                                cfg.horizon_rolls,
+                                main_seed,
+                            ),
+                            run_drawdown_session(
+                                &cfg.sel,
+                                &cfg.rules,
+                                min,
+                                cfg.horizon_rolls,
+                                dd_seed,
+                            ),
+                        ),
+                    };
                     let mut flags = 0u8;
                     if o.ruin.censored {
                         flags |= record_flags::CENSORED;
@@ -547,6 +583,7 @@ mod tests {
 
     fn cfg() -> SweepConfig {
         SweepConfig {
+            program: None,
             sel: BetSelection::default(),
             rules: Rules {
                 odds_policy: OddsPolicy::None,
@@ -567,6 +604,80 @@ mod tests {
 
     /// The M1 gate: the batched sweep must equal a one-shot serial loop
     /// bitwise, record for record, after reassembly by session index.
+    /// A swept strategy plays the same sweep the checkbox player does, when
+    /// the strategy *is* the checkbox player compiled. This is the
+    /// equivalence proof extended from one session to the whole run — every
+    /// minimum, every session index, the main view and the drawdown, which
+    /// is what Q3's recommended budget is cut from.
+    #[test]
+    fn a_swept_program_equals_the_swept_selection() {
+        use crate::strategy::{compile, from_selection};
+        let mut sel = BetSelection {
+            pass_line: true,
+            take_odds: true,
+            ..Default::default()
+        };
+        sel.come_max = 1;
+        sel.set_place(6, true);
+        let rules = Rules {
+            odds_policy: OddsPolicy::X345,
+            field_12_triple: false,
+            come_odds_work_on_comeout: false,
+            prop_bet_cents: 500,
+            table_max_mult: 1000,
+        };
+        let program = compile(&from_selection(&sel, &rules)).unwrap();
+
+        let base = SweepConfig {
+            sel: sel.clone(),
+            program: None,
+            rules: rules.clone(),
+            mins: vec![500, 1000, 2500],
+            budget_cents: 30_000,
+            quit_target_cents: None,
+            sessions: 600,
+            max_rolls: 200_000,
+            horizon_rolls: 400,
+            base_seed: 0xC0FFEE,
+        };
+        let with_program = SweepConfig {
+            program: Some(std::sync::Arc::new(program)),
+            ..base.clone()
+        };
+
+        let collect = |cfg: &SweepConfig| {
+            let (tx, rx) = sync_channel::<Batch>(64);
+            let ctl = SweepCtl::default();
+            std::thread::scope(|s| {
+                s.spawn(|| run_sweep(cfg, tx, &ctl));
+                let mut rows: Vec<(u32, u32, u32, i64, i64, u8)> = Vec::new();
+                for b in rx {
+                    for r in &b.records {
+                        rows.push((
+                            b.min_index,
+                            r.session,
+                            r.rolls,
+                            r.final_cents,
+                            r.peak_outlay_cents,
+                            r.flags,
+                        ));
+                    }
+                }
+                // Batches arrive in whatever order rayon finishes them.
+                // Every record carries its own session index, so sorting by
+                // (minimum, session) restores the canonical order the
+                // collector reassembles and makes this an exact per-session
+                // comparison rather than a comparison of sorted sets.
+                rows.sort_unstable();
+                rows
+            })
+        };
+        let a = collect(&base);
+        let b = collect(&with_program);
+        assert_eq!(a.len(), b.len(), "different number of sessions");
+        assert_eq!(a, b, "the strategy and the selection swept differently");
+    }
+
     #[test]
     fn batched_sweep_equals_one_shot_bitwise() {
         let cfg = cfg();

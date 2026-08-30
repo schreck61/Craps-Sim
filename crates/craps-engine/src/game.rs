@@ -119,6 +119,10 @@ pub(crate) struct Session<'a, O: RollObserver = Noop, F: Features = NoFeatures> 
 }
 
 impl<'a> Session<'a, Noop, NoFeatures> {
+    /// An untraced session with the built-in player's feature set. Only the
+    /// tests build one directly now — the runners go through
+    /// [`Session::with_observer`] so the player decides the feature bound.
+    #[cfg(test)]
     pub(crate) fn new(
         sel: &'a BetSelection,
         rules: &'a Rules,

@@ -40,6 +40,10 @@ pub struct App {
     pub cfg: SimConfig,
     /// The Bench: one session, stepped (STRATEGY_DSL.md §8).
     pub bench: crate::screens::bench::BenchState,
+    /// Whether the authored strategy is the live player. False means the
+    /// bet rail's checkbox selection plays, which is the default and what
+    /// every existing screen assumes.
+    pub use_strategy: bool,
     pub table_mins_text: String,
     pub seed: u64,
     pub prefs: Prefs,
@@ -118,6 +122,7 @@ impl App {
             .join(", ");
         Self {
             bench: Default::default(),
+            use_strategy: false,
             cfg,
             table_mins_text: mins_text,
             seed: fresh_seed(),
@@ -155,6 +160,25 @@ impl App {
         }
     }
 
+    /// The compiled strategy that will actually play, or `None` when the
+    /// checkbox player is live.
+    ///
+    /// One place decides this, so that what runs, what the rail says is
+    /// running, and what the export claims ran can never be three different
+    /// answers.
+    pub fn live_program(&self) -> Option<std::sync::Arc<craps_engine::strategy::Program>> {
+        if !self.use_strategy {
+            return None;
+        }
+        self.bench.program.clone().map(std::sync::Arc::new)
+    }
+
+    /// What is playing, in the words the rail and the baseline use.
+    pub fn live_player_label(&self) -> Option<String> {
+        let p = self.live_program()?;
+        Some(format!("{} #{:04x}", p.name, p.hash & 0xffff))
+    }
+
     pub fn anything_running(&self) -> bool {
         self.main_run.as_ref().is_some_and(|r| r.is_running())
             || self.explore_run.as_ref().is_some_and(|r| r.is_running())
@@ -166,12 +190,23 @@ impl App {
             self.error = Some(e);
             return;
         }
+        // A strategy selected but not compiled must not fall through to the
+        // checkbox player: that would attribute a distribution to a strategy
+        // that never played a roll of it.
+        if self.use_strategy && self.bench.program.is_none() {
+            self.error = Some(
+                "The strategy is the live player, but it has not compiled. \
+                 Fix it on the Bench, or switch back to the bet rail."
+                    .to_owned(),
+            );
+            return;
+        }
         self.last_elapsed = None;
         self.anchor = Default::default();
         self.stake_budget_probe = None;
         self.stake_confidence = None;
         self.focused_min = self.focused_min.min(self.cfg.table_mins_cents.len() - 1);
-        let run = start_main_run(&self.cfg, self.seed);
+        let run = start_main_run(&self.cfg, self.seed, self.live_program());
         run.focus(self.focused_min);
         self.main_run = Some(run);
         if self.mode == Mode::Design {
@@ -587,6 +622,27 @@ impl App {
             if ui.add(explore).clicked() {
                 self.start_explore();
             }
+        }
+        if let Some(label) = self.live_player_label() {
+            // Every other line in this rail describes the checkbox player.
+            // When it is not the one playing, that has to be said before any
+            // of them are read.
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new("playing a strategy")
+                    .font(FontId::new(type_scale::CAPTION, theme::sans()))
+                    .color(t.ink2),
+            );
+            ui.label(
+                RichText::new(label)
+                    .font(FontId::new(type_scale::CAPTION, theme::mono()))
+                    .color(t.ink),
+            );
+            ui.label(
+                RichText::new("the bets below are not in play")
+                    .font(FontId::new(type_scale::CAPTION, theme::sans()))
+                    .color(t.amber),
+            );
         }
         if let Some(err) = self.error.clone() {
             ui.add_space(4.0);
@@ -1033,10 +1089,18 @@ impl eframe::App for App {
         }
 
         // The provenance sentence, for export chrome (frames read this key).
-        let export_sentence = self
+        let mut export_sentence = self
             .provenance_config()
             .map(|c| sentence::render_text(&c))
             .unwrap_or_else(|| sentence::render_text(&self.cfg));
+        // A chart exported from a strategy run must not carry a sentence
+        // describing the bet rail. The sentence codec stays untouched — it
+        // is the save format and round-trips — so the statement is appended
+        // at the point of display, where §10's by-reference form will
+        // replace it when the strategy library lands.
+        if let Some(label) = self.live_player_label() {
+            export_sentence = format!("{export_sentence} · playing \"{label}\"");
+        }
         ctx.data_mut(|d| {
             d.insert_temp(egui::Id::new("scenario_sentence"), export_sentence);
         });

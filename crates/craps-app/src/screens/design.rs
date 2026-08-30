@@ -725,10 +725,13 @@ fn order_ticket(app: &mut App, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             match app.cfg.validate() {
                 Err(e) => {
+                    // Red is reserved for ruin and loss (spec §1, Principle
+                    // 2). A configuration that will not run is a problem, not
+                    // a bust; the words carry it.
                     ui.label(
                         RichText::new(format!("Run is disabled: {e}"))
                             .font(FontId::new(type_scale::BODY, theme::sans()))
-                            .color(t.ruin),
+                            .color(t.ink),
                     );
                 }
                 Ok(()) => {

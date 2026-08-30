@@ -390,16 +390,57 @@ pub fn run_drawdown_session(
     horizon_rolls: u64,
     seed: u64,
 ) -> i64 {
+    run_drawdown_with_player(&Builtin, sel, rules, table_min_cents, horizon_rolls, seed)
+}
+
+/// The unconstrained peak-outlay run, generic over who is playing. Q3's
+/// recommended budget is cut from this, so a compiled strategy has to be
+/// able to answer it too — a bankroll recommendation computed from the
+/// checkbox player while a strategy is live would be a confident wrong
+/// number.
+pub(crate) fn run_drawdown_with_player<P: Player>(
+    player: &P,
+    sel: &BetSelection,
+    rules: &Rules,
+    table_min_cents: i64,
+    horizon_rolls: u64,
+    seed: u64,
+) -> i64 {
     let mut rng = Xoshiro256pp::seed_from_u64(seed);
-    let mut s = Session::new(sel, rules, table_min_cents, 0, true);
+    let mut s: Session<'_, Noop, P::Feat> =
+        Session::with_observer(sel, rules, table_min_cents, 0, true, Noop);
+    s.progressions = player.progressions(sel);
     for _ in 0..horizon_rolls {
-        if s.needs_placement || s.one_roll_selected {
-            s.place_bets();
+        if player.wants_decision(&s) {
+            player.decide(&mut s);
         }
         let (d1, d2) = rng.dice();
         s.resolve(d1, d2);
     }
     s.max_outlay
+}
+
+/// The peak outlay a compiled strategy reaches, on the same dice.
+pub fn run_program_drawdown_session(
+    program: &Program,
+    rules: &Rules,
+    table_min_cents: i64,
+    horizon_rolls: u64,
+    seed: u64,
+) -> i64 {
+    let idle = BetSelection {
+        pass_line: false,
+        ..Default::default()
+    };
+    let cheapest = program.cheapest_stake(rules, table_min_cents);
+    run_drawdown_with_player(
+        &Compiled::new(program, cheapest),
+        &idle,
+        rules,
+        table_min_cents,
+        horizon_rolls,
+        seed,
+    )
 }
 
 #[cfg(test)]

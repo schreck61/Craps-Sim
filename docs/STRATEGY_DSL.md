@@ -2,8 +2,9 @@
 
 ## Craps-Sim Strategy Language — Design Specification & Implementation Plan
 
-**Status:** Proposal — nothing in this document is implemented yet. It targets
-the v0.5 release.
+**Status:** In progress against v0.5. P0–P4 have landed; §3, §5.2, §6 and
+Part II §3 have been corrected against what building them taught, with the
+original claim left visible above each correction.
 
 The Long Run ([GUI_DESIGN.md](GUI_DESIGN.md)) built the instrument. This
 document specifies its subject: a way to express *any* playing strategy —
@@ -692,6 +693,20 @@ debugging surface for P2 and P3 themselves.
   attributing every cent either to the rule that asked for it or to the
   table. Its own pixel snapshot, because the panel is collapsed by default
   and the picture worth having is of it in use.
+
+**P4c — The run path (1.5 dd). Done.** A design review found the hole this
+roadmap left: no milestone before P7 connected a compiled `Program` to a
+simulation run, so a strategy could be authored, compiled and stepped, and
+then Space would silently run the checkbox player instead. `SweepConfig`
+carries an optional program; one place decides which player is live; the
+rail says so and the exported provenance says so; a strategy selected but
+not compiled refuses the run rather than falling through. Risk 2's cut line
+("P0–P4 ship a complete, usable feature") was false until this landed.
+
+**P6a — Persistence (2.0 dd).** Pulled forward from P6 for the same reason:
+nothing persists an authored strategy, so every one written is destroyed on
+quit. A feature that discards the user's work cannot ship, whatever else is
+true of it.
 
 **P5 — The rule editor (10.0 dd).** Typed-slot rows, prose rendering,
 drag-reorder, the static checks of §9 wired into the existing order-ticket

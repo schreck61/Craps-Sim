@@ -75,10 +75,14 @@ impl MainRun {
 
 /// Start the fused main sweep: coordinator thread runs the engine, collector
 /// thread reassembles batches into the store.
-pub fn start_main_run(cfg: &SimConfig, seed: u64) -> MainRun {
+pub fn start_main_run(
+    cfg: &SimConfig,
+    seed: u64,
+    program: Option<Arc<craps_engine::strategy::Program>>,
+) -> MainRun {
     let store = Arc::new(Mutex::new(RunStore::new(cfg.clone(), seed)));
     let ctl = Arc::new(SweepCtl::default());
-    let sweep_cfg = cfg.to_sweep(seed);
+    let sweep_cfg = cfg.to_sweep(seed, program);
     let sessions = sweep_cfg.sessions;
     let n_mins = sweep_cfg.mins.len();
     let confidence = cfg.confidence;
@@ -490,7 +494,7 @@ mod tests {
             table_mins_cents: vec![500, 1000],
             ..Default::default()
         };
-        let run = start_main_run(&cfg, 0xDECAF);
+        let run = start_main_run(&cfg, 0xDECAF, None);
 
         // Wait for completion (bounded).
         let deadline = Instant::now() + std::time::Duration::from_secs(60);
@@ -514,7 +518,7 @@ mod tests {
 
             // Direct recomputation from the engine, same seeds.
             use craps_engine::{run_session, session_seed, SeedPhase};
-            let sweep = cfg.to_sweep(0xDECAF);
+            let sweep = cfg.to_sweep(0xDECAF, None);
             let mut finals: Vec<i64> = (0..5_000u64)
                 .map(|i| {
                     run_session(
@@ -569,7 +573,7 @@ mod tests {
             table_mins_cents: vec![500],
             ..Default::default()
         };
-        let run = start_main_run(&cfg, 7);
+        let run = start_main_run(&cfg, 7, None);
         // Cancel only after batches have demonstrably landed: a fixed sleep
         // raced cold CI runners to an honest-but-untestable n == 0.
         let deadline = Instant::now() + std::time::Duration::from_secs(60);

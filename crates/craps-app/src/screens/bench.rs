@@ -186,6 +186,23 @@ fn controls(app: &mut App, ui: &mut egui::Ui) {
             run(app);
         }
     });
+    ui.horizontal(|ui| {
+        let ready = app.bench.program.is_some();
+        ui.add_enabled(
+            ready,
+            egui::Checkbox::new(&mut app.use_strategy, "Play this instead of the bet rail"),
+        )
+        .on_hover_text("Space, and every Findings number, will come from this strategy");
+        if app.use_strategy && !ready {
+            // Selected but not compiled: say so here rather than let Run
+            // fail with a message far from the control that caused it.
+            ui.label(
+                RichText::new("— compile it first")
+                    .font(FontId::new(type_scale::CAPTION, theme::sans()))
+                    .color(t.ink),
+            );
+        }
+    });
 }
 
 fn run(app: &mut App) {
@@ -215,7 +232,7 @@ fn status(app: &mut App, ui: &mut egui::Ui) {
         ui.label(
             RichText::new(e)
                 .font(FontId::new(type_scale::BODY, theme::sans()))
-                .color(t.ruin),
+                .color(t.ink),
         );
         return;
     }

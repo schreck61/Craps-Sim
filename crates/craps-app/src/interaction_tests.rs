@@ -641,3 +641,77 @@ fn theme_survives_an_os_slot_flip() {
         "and flipping back stays themed"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The live player (STRATEGY_DSL.md P4c)
+// ---------------------------------------------------------------------------
+
+/// Which player is live is decided in one place, and a strategy that has not
+/// compiled can never quietly become the checkbox player's results.
+#[test]
+fn a_strategy_becomes_the_live_player_or_the_run_is_refused() {
+    use craps_engine::strategy::{from_selection, render};
+
+    let mut h = build_app(|app| {
+        app.cfg.sel.set_place(6, true);
+        app.bench.source = render(&from_selection(&app.cfg.sel, &app.cfg.rules()));
+        app.bench.build();
+    });
+    h.step();
+    assert!(h.state().bench.program.is_some(), "the take compiles");
+
+    // Not selected: the bet rail plays, and nothing claims otherwise.
+    assert!(h.state().live_program().is_none());
+    assert!(h.state().live_player_label().is_none());
+
+    // Selected: the strategy plays, and says which one it is.
+    h.state_mut().use_strategy = true;
+    h.step();
+    assert!(h.state().live_program().is_some());
+    let label = h.state().live_player_label().unwrap();
+    assert!(label.contains("checkbox player"), "{label}");
+
+    // Selected but broken: the run is refused in words rather than handed
+    // to the bet rail, which would attribute a distribution to a strategy
+    // that never played a roll of it.
+    {
+        let app = h.state_mut();
+        app.bench.source = "strategy \"x\" language 1\non roll:\n    bet wobble base\n".into();
+        app.bench.build();
+    }
+    h.step();
+    assert!(h.state().live_program().is_none());
+    h.state_mut().start_run();
+    h.step();
+    assert!(
+        h.state()
+            .error
+            .as_ref()
+            .is_some_and(|e| e.contains("has not compiled")),
+        "{:?}",
+        h.state().error
+    );
+    assert!(h.state().main_run.is_none(), "a refused run must not start");
+}
+
+/// A run played by a strategy carries that fact into the provenance every
+/// export bakes in — a chart whose sentence described the bet rail while a
+/// strategy produced the numbers would be the plainest possible violation of
+/// "every number carries its provenance".
+#[test]
+fn exported_provenance_names_the_strategy_that_played() {
+    use craps_engine::strategy::{from_selection, render};
+
+    let mut h = build_app(|app| {
+        app.bench.source = render(&from_selection(&app.cfg.sel, &app.cfg.rules()));
+        app.bench.build();
+        app.use_strategy = true;
+    });
+    h.step();
+    let key = egui::Id::new("scenario_sentence");
+    let sentence: String = h.ctx.data(|d| d.get_temp(key).unwrap_or_default());
+    assert!(
+        sentence.contains("playing"),
+        "the exported sentence does not say a strategy played: {sentence}"
+    );
+}
