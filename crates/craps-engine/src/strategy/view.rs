@@ -275,6 +275,11 @@ pub struct TableView<'s> {
     /// wrong at every other.
     pub(crate) table_min: i64,
     pub(crate) table_max: i64,
+    /// The table's own rules. A strategy whose arithmetic assumes a layout —
+    /// the twelve paying triple, come odds working on the come-out — could
+    /// state that assumption nowhere, so it played whatever table it was
+    /// given and reported the numbers as though it had got the one it meant.
+    pub(crate) rules: &'s crate::bets::Rules,
     pub(crate) handle: i64,
     pub(crate) stakes: Stakes<'s>,
     pub(crate) hist: &'s History,
@@ -292,6 +297,8 @@ pub(crate) struct Stakes<'s> {
     pub hard: &'s [i64; 4],
     pub place_working: &'s [bool; 6],
     pub hard_working: &'s [bool; 4],
+    pub place_comeout: &'s [bool; 6],
+    pub hard_comeout: &'s [bool; 4],
     pub come_points: &'s [i64; 6],
     pub come_odds: &'s [i64; 6],
     pub dc_points: &'s [i64; 6],
@@ -326,10 +333,46 @@ impl TableView<'_> {
         on as i64
     }
 
+    /// Whether this bet also resolves on a come-out roll — the second of the
+    /// two flags, which only place bets and hardways have. Everything else
+    /// works whenever it is up, on the come-out as anywhere.
+    #[inline]
+    pub fn working_comeout(&self, bet: BetRef) -> i64 {
+        let on = match bet {
+            BetRef::Place(n) => crate::place_index(n).is_some_and(|i| {
+                self.stakes.place[i] > 0
+                    && self.stakes.place_working[i]
+                    && self.stakes.place_comeout[i]
+            }),
+            BetRef::Hardway(n) => crate::hard_index(n).is_some_and(|i| {
+                self.stakes.hard[i] > 0
+                    && self.stakes.hard_working[i]
+                    && self.stakes.hard_comeout[i]
+            }),
+            other => self.up(other),
+        };
+        on as i64
+    }
+
     /// The table minimum, in cents.
     #[inline]
     pub fn table_min(&self) -> i64 {
         self.table_min
+    }
+
+    /// Whether this table pays 3:1 on the twelve in the field. The two is
+    /// always 2:1; the twelve is the one a house varies, and it is the
+    /// difference between the field being a bad bet and a worse one.
+    #[inline]
+    pub fn field_12_triple(&self) -> i64 {
+        self.rules.field_12_triple as i64
+    }
+
+    /// Whether come odds stay working on a come-out roll. Standard is that
+    /// they do not.
+    #[inline]
+    pub fn come_odds_work_on_comeout(&self) -> i64 {
+        self.rules.come_odds_work_on_comeout as i64
     }
 
     /// The table maximum, in cents — the ceiling every progression meets
@@ -587,6 +630,7 @@ mod tests {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 1000,
+            place_the_point: false,
         }
     }
 

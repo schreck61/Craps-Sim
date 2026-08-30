@@ -505,6 +505,7 @@ mod tests {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 1000,
+            place_the_point: false,
         }
     }
 
@@ -643,6 +644,7 @@ mod tests {
         // A $5 table with a 4x maximum: the Martingale meets it fast.
         let r = Rules {
             table_max_mult: 4,
+            place_the_point: false,
             ..rules()
         };
         let s = parse("strategy \"x\" language 1\npress martingale\non come-out:\n bet pass\n")

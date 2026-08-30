@@ -81,6 +81,9 @@ pub enum Read {
     /// at.
     TableMin,
     TableMax,
+    /// Table rules a strategy's arithmetic may depend on.
+    Field12Triple,
+    ComeOddsWorkOnComeout,
     Stake(BetRef),
     Up(BetRef),
     /// Whether this bet is working — a place bet or hardway that has been
@@ -88,6 +91,11 @@ pub enum Read {
     /// strategy that can turn one off could not previously ask whether it
     /// had.
     Working(BetRef),
+    /// Whether this bet also works on the come-out. The other half of the
+    /// same question, added at the same time as the statement that sets it:
+    /// a language that can say a thing and not ask it back is how the first
+    /// asymmetry here went unnoticed for two revisions.
+    WorkingComeOut(BetRef),
     LiveCome,
     LiveDontCome,
     /// The come flat established on this number, 0 if none.
@@ -172,12 +180,28 @@ pub enum Stmt {
     Regress(BetRef, AmountExpr),
     /// Take the bet down entirely.
     Down(BetRef),
-    /// Turn a place bet or hardway off, or back on.
-    Working(BetRef, bool),
+    /// Turn a place bet or hardway off, or back on — and say when.
+    Working(BetRef, bool, WorkingWhen),
     /// Leave the table.
     Leave,
     /// Write a value into strategy memory.
     Set(VarId, Expr),
+}
+
+/// Which half of a bet's working state a `working` statement sets.
+///
+/// Craps has always had both, and the language could only say the first: a
+/// bet is working during a point cycle unless it is called off, and is *not*
+/// working on the come-out unless it is called on. `working place 6 on` was
+/// accepted on a come-out and then ignored by the table, which is a rule
+/// firing and doing nothing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum WorkingWhen {
+    /// While a point is on — the default, and what `working <bet> on` means.
+    #[default]
+    PointCycle,
+    /// On the come-out roll as well.
+    ComeOut,
 }
 
 /// `on <trigger> [when <guard>]: <body>`.

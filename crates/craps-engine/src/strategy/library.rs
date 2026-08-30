@@ -167,6 +167,7 @@ mod tests {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 1000,
+            place_the_point: false,
         }
     }
 

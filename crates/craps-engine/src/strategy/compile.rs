@@ -190,9 +190,9 @@ pub fn compile(s: &Strategy) -> Result<Program, CompileError> {
                     check_bet_ref(*bet)?;
                     ops.push(Op::Down(*bet));
                 }
-                Stmt::Working(bet, on) => {
+                Stmt::Working(bet, on, when) => {
                     check_bet_ref(*bet)?;
-                    ops.push(Op::Working(*bet, *on));
+                    ops.push(Op::Working(*bet, *on, *when));
                 }
                 Stmt::Leave => ops.push(Op::Leave),
                 Stmt::Set(slot, e) => {
@@ -399,9 +399,12 @@ fn feature_of(r: Read) -> FeatureMask {
         | Read::BuyIn
         | Read::TableMin
         | Read::TableMax
+        | Read::Field12Triple
+        | Read::ComeOddsWorkOnComeout
         | Read::Stake(_)
         | Read::Up(_)
         | Read::Working(_)
+        | Read::WorkingComeOut(_)
         | Read::LiveCome
         | Read::LiveDontCome
         | Read::ComePoint(_)
@@ -552,9 +555,12 @@ fn op_shape(op: Op) -> (u8, u64, u64) {
             Read::BuyIn => (12, 0),
             Read::TableMin => (13, 0),
             Read::TableMax => (14, 0),
+            Read::Field12Triple => (29, 0),
+            Read::ComeOddsWorkOnComeout => (30, 0),
             Read::Stake(b) => (15, bet(b)),
             Read::Up(b) => (16, bet(b)),
             Read::Working(b) => (17, bet(b)),
+            Read::WorkingComeOut(b) => (31, bet(b)),
             Read::LiveCome => (18, 0),
             Read::LiveDontCome => (19, 0),
             Read::ComePoint(n) => (20, n as u64),
@@ -619,7 +625,11 @@ fn op_shape(op: Op) -> (u8, u64, u64) {
         Op::Press(b, k) => (10, bet(b), kind(k)),
         Op::Regress(b, k) => (11, bet(b), kind(k)),
         Op::Down(b) => (12, bet(b), 0),
-        Op::Working(b, on) => (13, bet(b), on as u64),
+        Op::Working(b, on, when) => (
+            13,
+            bet(b),
+            on as u64 | ((matches!(when, crate::strategy::ast::WorkingWhen::ComeOut) as u64) << 1),
+        ),
         Op::Leave => (14, 0, 0),
     }
 }

@@ -88,7 +88,7 @@ pub enum Action {
     /// Turn a working bet off or back on. An off bet sits on the layout
     /// resolving nothing — still the player's money, still counted in what
     /// they would walk away with.
-    Working(BetRef, bool),
+    Working(BetRef, bool, crate::strategy::ast::WorkingWhen),
     /// End the session and pick everything up. The take-profit rule in the
     /// configuration is the Explorer's axis; this is a strategy leaving on
     /// its own terms, which is how a stop-loss is said.
@@ -190,7 +190,7 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
             Action::Bet(bet, amount) => self.apply_rule_bet(bet, amount),
             Action::SetStake(bet, amount) => self.apply_set_stake(bet, amount),
             Action::Down(bet) => self.apply_down(bet),
-            Action::Working(bet, on) => self.apply_working(bet, on),
+            Action::Working(bet, on, when) => self.apply_working(bet, on, when),
             Action::Leave => {
                 self.leaving = true;
                 Ok(0)
@@ -348,18 +348,30 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
     /// line and come bets are contract bets, odds ride with what they back,
     /// and a one-roll bet resolves before the question could be asked.
     #[inline(never)]
-    fn apply_working(&mut self, bet: BetRef, on: bool) -> Adjudication {
+    fn apply_working(
+        &mut self,
+        bet: BetRef,
+        on: bool,
+        when: crate::strategy::ast::WorkingWhen,
+    ) -> Adjudication {
+        use crate::strategy::ast::WorkingWhen;
         match bet {
             BetRef::Place(n) => match place_index(n) {
                 Some(i) => {
-                    self.place_working[i] = on;
+                    match when {
+                        WorkingWhen::PointCycle => self.place_working[i] = on,
+                        WorkingWhen::ComeOut => self.place_comeout[i] = on,
+                    }
                     Ok(0)
                 }
                 None => self.reject_asking(bet, Attempted::Working, 0, RejectReason::NotAllowedNow),
             },
             BetRef::Hardway(n) => match hard_index(n) {
                 Some(i) => {
-                    self.hard_working[i] = on;
+                    match when {
+                        WorkingWhen::PointCycle => self.hard_working[i] = on,
+                        WorkingWhen::ComeOut => self.hard_comeout[i] = on,
+                    }
                     Ok(0)
                 }
                 None => self.reject_asking(bet, Attempted::Working, 0, RejectReason::NotAllowedNow),
@@ -493,7 +505,13 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
             // The point number is never placed, and place bets are made only
             // while a point is on.
             BetRef::Place(_) if self.point.is_none() => Err(RejectReason::NeedsPointOn),
-            BetRef::Place(n) if self.point == Some(n) => Err(RejectReason::NumberIsThePoint),
+            // A real table will usually sell you the point as a place bet on
+            // top of the line bet covering it. This engine refused it from
+            // the start, which is a divergence rather than a rule of craps —
+            // so it is now the table's answer to give.
+            BetRef::Place(n) if self.point == Some(n) && !self.rules.place_the_point => {
+                Err(RejectReason::NumberIsThePoint)
+            }
             _ => Ok(spec),
         }
     }
@@ -917,6 +935,7 @@ pub(crate) fn bet_kind(bet: BetRef) -> BetKind {
 mod tests {
     use super::*;
     use crate::bets::{BetSelection, OddsPolicy, Rules};
+    use crate::strategy::ast::WorkingWhen;
     use crate::trace::BetEvent;
 
     /// Collects every bet event, so a test can assert that a refusal was
@@ -940,6 +959,7 @@ mod tests {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 1000,
+            place_the_point: false,
         }
     }
 
@@ -974,7 +994,11 @@ mod tests {
         t.point = Some(4);
         let _ = t.apply(Action::SetStake(BetRef::Place(6), Amount::Cents(5000)));
         let _ = t.apply(Action::Down(BetRef::Place(8)));
-        let _ = t.apply(Action::Working(BetRef::Field, false));
+        let _ = t.apply(Action::Working(
+            BetRef::Field,
+            false,
+            WorkingWhen::PointCycle,
+        ));
         let seen: Vec<(Attempted, RejectReason, i64)> = t
             .obs
             .events
@@ -1051,6 +1075,42 @@ mod tests {
         assert!(t
             .apply(Action::Bet(BetRef::Place(8), Amount::Units(1)))
             .is_ok());
+    }
+
+    /// The point may be placed where the table allows it.
+    ///
+    /// This engine refused it from the start, which is a divergence from a
+    /// real table rather than a rule of craps — five of the twelve strategies
+    /// written against this language in review wanted the number the line
+    /// already covers. It is the table's answer to give now, and the default
+    /// keeps the old one so no saved result changes meaning.
+    #[test]
+    fn the_point_may_be_placed_where_the_table_allows_it() {
+        let sel = BetSelection::default();
+        let default_rules = rules(OddsPolicy::None);
+        let mut strict = table(&sel, &default_rules, 100_000);
+        strict.point = Some(6);
+        assert_eq!(
+            strict.apply(Action::Bet(BetRef::Place(6), Amount::Units(1))),
+            Err(RejectReason::NumberIsThePoint),
+            "the default is what it always was"
+        );
+
+        let permissive = Rules {
+            place_the_point: true,
+            ..default_rules
+        };
+        let mut t = table(&sel, &permissive, 100_000);
+        t.point = Some(6);
+        assert_eq!(
+            t.apply(Action::Bet(BetRef::Place(6), Amount::Units(1))),
+            Ok(1200)
+        );
+        assert_eq!(t.place[2], 1200);
+        // And it pays like any other place bet when the number comes.
+        let cash = t.cash;
+        t.resolve(3, 3);
+        assert!(t.cash > cash, "a placed point that hits is paid");
     }
 
     #[test]
@@ -1303,7 +1363,12 @@ mod tests {
         t.point = Some(4);
         t.apply(Action::Bet(BetRef::Place(6), Amount::Base))
             .unwrap();
-        t.apply(Action::Working(BetRef::Place(6), false)).unwrap();
+        t.apply(Action::Working(
+            BetRef::Place(6),
+            false,
+            WorkingWhen::PointCycle,
+        ))
+        .unwrap();
         let cash = t.cash;
 
         t.resolve(3, 3); // the 6 hits, but the bet is off

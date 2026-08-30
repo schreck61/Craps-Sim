@@ -351,6 +351,15 @@ pub struct Rules {
     /// Table maximum bet, as a multiple of the table minimum. Progressions
     /// (Martingale especially) are clamped here, as at a real table.
     pub table_max_mult: i64,
+    /// true: the box number that is the point may be placed as well as
+    /// covered by the line, which is what a real table will usually sell
+    /// you; false (this engine's long-standing behaviour): it is refused.
+    ///
+    /// A flag rather than a change, because it moves money in every session
+    /// that touches it — five of the twelve strategies written against this
+    /// language in review wanted to place the point, and every one of them
+    /// would have played differently under a table that allowed it.
+    pub place_the_point: bool,
 }
 
 /// Cheapest base stake among the selected recurring bets at a given table

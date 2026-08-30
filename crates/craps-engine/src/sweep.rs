@@ -688,6 +688,7 @@ mod tests {
                 come_odds_work_on_comeout: false,
                 prop_bet_cents: 500,
                 table_max_mult: 1000,
+                place_the_point: false,
             },
             mins: vec![500, 1000],
             budget_cents: 30_000,
@@ -722,6 +723,7 @@ mod tests {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 1000,
+            place_the_point: false,
         };
         let program = compile(&from_selection(&sel, &rules)).unwrap();
 
@@ -856,6 +858,7 @@ mod tests {
                 come_odds_work_on_comeout: false,
                 prop_bet_cents: 500,
                 table_max_mult: 500,
+                place_the_point: false,
             },
             mins: vec![1000],
             budget_cents: 30_000,
@@ -911,6 +914,7 @@ mod tests {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 1000,
+            place_the_point: false,
         };
         let program = std::sync::Arc::new(compile(&from_selection(&sel, &rules)).unwrap());
         let checkbox = PairSide {
@@ -948,6 +952,7 @@ mod tests {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 1000,
+            place_the_point: false,
         };
         let program = std::sync::Arc::new(compile(&from_selection(&sel, &rules)).unwrap());
         let cfg = ExploreConfig {
@@ -990,6 +995,7 @@ mod tests {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 500,
+            place_the_point: false,
         };
         let side = PairSide {
             program: None,
@@ -1093,6 +1099,7 @@ mod investigation {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 500,
+            place_the_point: false,
         };
         let budget = 100_000i64;
         let sessions = 400_000u64;
@@ -1155,6 +1162,7 @@ mod investigation {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 500,
+            place_the_point: false,
         };
         let budget = 100_000i64;
         let horizon = 400u64;

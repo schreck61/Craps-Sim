@@ -30,7 +30,9 @@ pub(crate) mod text;
 pub(crate) mod view;
 
 pub use action::{Action, Adjudication, Amount, BetRef, RejectReason};
-pub use ast::{AmountExpr, BinOp, Block, Expr, Group, Read, Rule, Stmt, Strategy, Trigger, VarId};
+pub use ast::{
+    AmountExpr, BinOp, Block, Expr, Group, Read, Rule, Stmt, Strategy, Trigger, VarId, WorkingWhen,
+};
 pub use bench::{bench_session, BenchEvent, BenchRoll, BenchTrace};
 pub use check::{against_table, check, Diagnostic};
 pub use compile::{compile, CompileError};

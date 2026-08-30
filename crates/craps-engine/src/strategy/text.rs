@@ -21,7 +21,9 @@
 //! symbol table in the tokenizer.
 
 use crate::bets::Progression;
-use crate::strategy::ast::{AmountExpr, BinOp, Expr, Group, Read, Rule, Stmt, Strategy, Trigger};
+use crate::strategy::ast::{
+    AmountExpr, BinOp, Expr, Group, Read, Rule, Stmt, Strategy, Trigger, WorkingWhen,
+};
 use crate::strategy::view::{stream_of, STREAMS};
 use crate::strategy::BetRef;
 
@@ -461,7 +463,7 @@ const fn is_odds_ref(bet: BetRef) -> bool {
 /// rest of the parameterized reads are recognized only when a `(` follows,
 /// so `var hits` is a perfectly good memory slot and always was — reserving
 /// those would take names people actually want, for no reason at all.
-const RESERVED_WORDS: [&str; 40] = [
+const RESERVED_WORDS: [&str; 43] = [
     // reads spelled as a bare word
     "point",
     "come-out",
@@ -478,6 +480,9 @@ const RESERVED_WORDS: [&str; 40] = [
     "buy-in",
     "table-min",
     "table-max",
+    "field-12-triple",
+    "working-on-come-out",
+    "come-odds-work-on-comeout",
     "live-come",
     "live-dont-come",
     "on-table-face",
@@ -758,10 +763,11 @@ impl Parser {
         // against a positional code twice, which is a table that breaks
         // silently the day somebody inserts a row in the middle.
         type MakeRead = fn(BetRef) -> Read;
-        const ON_THE_FELT: [(&str, MakeRead); 3] = [
+        const ON_THE_FELT: [(&str, MakeRead); 4] = [
             ("stake", Read::Stake),
             ("up", Read::Up),
             ("working", Read::Working),
+            ("working-on-come-out", Read::WorkingComeOut),
         ];
         const IN_THE_RECORD: [(&str, MakeRead); 4] = [
             ("wins", Read::Wins),
@@ -833,6 +839,8 @@ impl Parser {
             ("buy-in", Read::BuyIn),
             ("table-min", Read::TableMin),
             ("table-max", Read::TableMax),
+            ("field-12-triple", Read::Field12Triple),
+            ("come-odds-work-on-comeout", Read::ComeOddsWorkOnComeout),
             ("live-come", Read::LiveCome),
             ("live-dont-come", Read::LiveDontCome),
             ("on-table-face", Read::OnTableFace),
@@ -1202,7 +1210,20 @@ impl Parser {
             } else {
                 return self.err("expected \"on\" or \"off\"");
             };
-            return Ok(members.iter().map(|b| Stmt::Working(*b, on)).collect());
+            // `working place 6 on come-out` — the other half of the working
+            // question, and the one craps actually varies. Unambiguous
+            // because a rule always begins with `on`, so the token after
+            // `on`/`off` is either the next statement, the next rule's `on`,
+            // or this qualifier.
+            let when = if self.eat("come-out") {
+                WorkingWhen::ComeOut
+            } else {
+                WorkingWhen::PointCycle
+            };
+            return Ok(members
+                .iter()
+                .map(|b| Stmt::Working(*b, on, when))
+                .collect());
         }
         if self.eat("leave") {
             // A reason may be given; it is for the reader, not the engine.
@@ -1418,12 +1439,15 @@ fn read_text(r: Read) -> String {
         Read::BuyIn => "buy-in".into(),
         Read::TableMin => "table-min".into(),
         Read::TableMax => "table-max".into(),
+        Read::Field12Triple => "field-12-triple".into(),
+        Read::ComeOddsWorkOnComeout => "come-odds-work-on-comeout".into(),
         Read::LiveCome => "live-come".into(),
         Read::LiveDontCome => "live-dont-come".into(),
         Read::OnTableFace => "on-table-face".into(),
         Read::Stake(b) => format!("stake({})", bet_text(b)),
         Read::Up(b) => format!("up({})", bet_text(b)),
         Read::Working(b) => format!("working({})", bet_text(b)),
+        Read::WorkingComeOut(b) => format!("working-on-come-out({})", bet_text(b)),
         Read::Wins(b) => format!("wins({})", bet_text(b)),
         Read::Losses(b) => format!("losses({})", bet_text(b)),
         Read::Streak(b) => format!("streak({})", bet_text(b)),
@@ -1709,10 +1733,14 @@ fn stmt_text(s: &Stmt, vars: &[String]) -> String {
             amount_text(a, vars),
         ),
         Stmt::Down(b) => format!("down {}", bet_text(*b)),
-        Stmt::Working(b, on) => format!(
-            "working {} {}",
+        Stmt::Working(b, on, when) => format!(
+            "working {} {}{}",
             bet_text(*b),
-            if *on { "on" } else { "off" }
+            if *on { "on" } else { "off" },
+            match when {
+                WorkingWhen::PointCycle => "",
+                WorkingWhen::ComeOut => " come-out",
+            }
         ),
         Stmt::Leave => "leave".into(),
         Stmt::Set(i, e) => format!(
@@ -1905,6 +1933,7 @@ mod tests {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 1000,
+            place_the_point: false,
         }
     }
 
@@ -2861,7 +2890,15 @@ on roll when profit <= -$200 or profit >= $150:
                         1 => Stmt::Press(b, amount),
                         2 => Stmt::Regress(b, amount),
                         3 => Stmt::Down(b),
-                        4 => Stmt::Working(BetRef::Place(6), g.next().is_multiple_of(2)),
+                        4 => Stmt::Working(
+                            BetRef::Place(6),
+                            g.next().is_multiple_of(2),
+                            if g.next().is_multiple_of(2) {
+                                WorkingWhen::ComeOut
+                            } else {
+                                WorkingWhen::PointCycle
+                            },
+                        ),
                         5 => Stmt::Leave,
                         _ => Stmt::Set((g.next() % 2) as u16, expr(&mut g, 2)),
                     });

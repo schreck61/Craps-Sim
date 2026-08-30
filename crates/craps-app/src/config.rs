@@ -72,6 +72,11 @@ pub struct SimConfig {
     pub odds_policy: OddsPolicy,
     pub field_12_triple: bool,
     pub come_odds_work_on_comeout: bool,
+    /// Whether the table sells a place bet on the number that is the point.
+    /// A real one usually will; this engine refused it from the start, and
+    /// the default keeps that so no saved result changes meaning under
+    /// somebody's feet.
+    pub place_the_point: bool,
     pub prop_bet_cents: i64,
     pub table_max_mult: i64,
     // --- explorer knobs (fingerprinted separately) ---
@@ -95,6 +100,7 @@ impl Default for SimConfig {
             odds_policy: OddsPolicy::X345,
             field_12_triple: false,
             come_odds_work_on_comeout: false,
+            place_the_point: false,
             prop_bet_cents: 500,
             table_max_mult: 500,
             explore_sessions: 5_000,
@@ -147,6 +153,7 @@ impl SimConfig {
             come_odds_work_on_comeout: self.come_odds_work_on_comeout,
             prop_bet_cents: self.prop_bet_cents.max(100),
             table_max_mult: self.table_max_mult.max(1),
+            place_the_point: self.place_the_point,
         }
     }
 
@@ -182,6 +189,7 @@ impl SimConfig {
             come_odds_work_on_comeout: self.come_odds_work_on_comeout,
             prop_bet_cents: self.prop_bet_cents.max(100),
             table_max_mult: self.table_max_mult.max(1),
+            place_the_point: self.place_the_point,
         }
     }
 
@@ -316,6 +324,7 @@ impl SimConfig {
         });
         f.tag(self.field_12_triple as u8);
         f.tag(self.come_odds_work_on_comeout as u8);
+        f.tag(self.place_the_point as u8);
         f.i64(self.prop_bet_cents);
         f.i64(self.table_max_mult);
         f.finish()
@@ -349,6 +358,7 @@ impl SimConfig {
         });
         f.tag(self.field_12_triple as u8);
         f.tag(self.come_odds_work_on_comeout as u8);
+        f.tag(self.place_the_point as u8);
         f.i64(self.prop_bet_cents);
         f.i64(self.table_max_mult);
     }
@@ -459,11 +469,13 @@ mod tests {
         });
         // Cross-platform stability is by construction (explicit LE bytes);
         // pin the actual value so any accidental format change fails loudly.
-        // Changed deliberately when the configuration learned which
-        // player is live (STRATEGY_DSL.md §10): a run cut from a strategy
-        // and one cut from the bet rail are different runs, so the
-        // fingerprint has to tell them apart or staleness cannot.
-        assert_eq!(fp, 9031665053774321689, "fingerprint format changed");
+        // Changed deliberately twice on the way to 0.5.0, both times
+        // because the fingerprint learned something a run genuinely differs
+        // by: which player is live (STRATEGY_DSL.md §10), and whether the
+        // table sells the point as a place bet. Neither run is comparable
+        // to the other, so the fingerprint has to tell them apart or
+        // staleness cannot.
+        assert_eq!(fp, 12232395748797100403, "fingerprint format changed");
     }
 
     #[test]

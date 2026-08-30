@@ -68,6 +68,7 @@ fn rules(odds_policy: OddsPolicy) -> Rules {
         come_odds_work_on_comeout: false,
         prop_bet_cents: 500,
         table_max_mult: 500,
+        place_the_point: false,
     }
 }
 

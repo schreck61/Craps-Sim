@@ -11,10 +11,11 @@ each correction. The gaps are enumerated in that review; what is written here
 is what the code does.
 
 Some of those gaps have since been closed by building the thing rather than by
-rewording the claim: the table's own numbers and `working(bet)` as reads
-(§3.2), the `everything` group (§3.3), `press … by` (§3.3), lists walked in
-step (§4), all six static checks (§9), and a version gate that refuses forward
-and reads back (§5.2). Those passages are additions rather than corrections,
+rewording the claim: the table's own numbers, its rules, and `working(bet)` as
+reads (§3.2), the `everything` group (§3.3), `press … by` (§3.3), working on
+the come-out (§3.3, §3.5), the point as a placeable number (§3.5), lists walked
+in step (§4), all six static checks (§9), and a version gate that refuses
+forward and reads back (§5.2). Those passages are additions rather than corrections,
 and they say so where the distinction matters. What remains undone is in
 Part II §8, which is the honest list.
 
@@ -132,7 +133,7 @@ because this is what decides which strategies are expressible:
 |---|---|
 | Dice & point | `point` (0 = off), `come-out`, `last-total`, `roll`, `rolls-this-shooter`, `shooter` |
 | Money | `cash`, `wealth`, `profit`, `peak-profit`, `drawdown`, `handle`, `buy-in` |
-| Table | `table-min`, `table-max` |
+| Table | `table-min`, `table-max`, `field-12-triple`, `come-odds-work-on-comeout` |
 | Layout | `up(bet)`, `stake(bet)`, `working(bet)`, `live-come`, `live-dont-come`, `come-point(n)`, `dont-come-point(n)`, `on-table-face` |
 | History | `hits(n)`, `hits-this-shooter(n)`, `wins(bet)`, `losses(bet)`, `streak(bet)`, `paid(bet)` |
 | Memory | user-declared variables and flags |
@@ -165,7 +166,10 @@ whenever it is up, and giving the same question two answers depending on which
 bet was asked about would be the language describing its own implementation.
 The standing workaround — remember it in a `var` set beside the `working`
 statement that did it — was advice for a gap that no longer exists, and a
-strategy written that way still works but no longer has to be.
+strategy written that way still works but no longer has to be. It answers the
+half of the working question that varies during a point cycle; the come-out
+half (§3.3) can be written and not read, which is the same asymmetry one
+notch further in and is recorded here rather than left to be found.
 
 **It stopped short of what the parser accepts.** `come-out`, `come-point(n)`
 and `dont-come-point(n)` exist and are listed above. `come-point(n)` is how a
@@ -186,6 +190,20 @@ experiment hard-coded a number that should have been one of these three, and
 nothing said so, because a wrong constant is not a syntax error. Written as
 `profit <= -buy-in / 2`, or `stake(pass) * 2 > table-max`, the strategy travels
 to the table it is played at instead of the one it was typed at.
+
+**And the table's *rules* are reads, for the same reason its numbers are.**
+`field-12-triple` answers 1 when the twelve in the field pays 3:1 and 0 when
+it pays 2:1 — the two is always 2:1, and the twelve is the one a house varies.
+`come-odds-work-on-comeout` answers whether come odds stay live through a
+come-out; standard is that they do not. Both were already settings of the
+table, carried in the Scenario Sentence and fingerprinted; what is new is that
+the player at that table can ask. Two of the twelve strategies in the
+expressiveness experiment had stated arithmetic that depended on the twelve
+paying triple and could say so nowhere — so they played whatever table the run
+was configured with and reported their numbers as though they had the one they
+meant, which is a wrong answer wearing the shape of a right one. A guard of
+`field-12-triple == 0` on a rule that leaves is a strategy declining a table it
+was not written for, and that is the whole point of spending two reads on it.
 
 All values are `i64` cents or counts. **There is no floating-point arithmetic in
 the language** — money is integer cents end to end, as everywhere else in this
@@ -223,7 +241,9 @@ enum Action {
     Bet(BetRef, Amount),          // put it up if it is not up; idempotent
     SetStake(BetRef, Amount),     // move a working bet to a new stake
     Down(BetRef),                 // take it down where the table allows
-    Working(BetRef, bool),        // off/on — place bets and hardways only
+    Working(BetRef, bool, WorkingWhen),
+                                  // off/on, and which half — place bets and
+                                  // hardways only
     Leave,
 }
 ```
@@ -291,6 +311,7 @@ regress place 6 to base
 down all place
 down everything                    # the place numbers and the hardways
 working place 6 off               # and `working place 6 on`
+working place 6 on come-out       # the other half of the same question
 leave                             # `leave "enough"` reads the same to the engine
 set hits = hits + 1
 ```
@@ -312,6 +333,27 @@ they are leaving, and it sweeps exactly what a dealer would sweep — a group
 whose membership is the answer to a rule of craps rather than a list somebody
 chose. Written any other way it would half-fail on every use, refusing four
 bets (§3.4) to take down six.
+
+*Corrected: `working` says **when**, and the first sketch was right to.* The
+original claim above spells the action `Working(BetRef, bool)` and comments it
+"place bets on the come-out" — the come-out is named in the comment and absent
+from the type, and what shipped was the type. The narrowing was invisible from
+the outside, which is what made it a defect rather than a missing feature:
+`working place 6 on` written for a come-out parsed, compiled, adjudicated,
+returned `Ok`, and set a flag, while the come-out branch of `resolve` had no
+place or hardway resolution arm in it at all. There was nothing for the flag to
+switch. The bet sat through the one roll its author had said it should work,
+and nothing anywhere said otherwise — a rule that fires and does nothing,
+which is exactly what Principle 4 forbids.
+
+The grammar is `working <bet> on come-out` and `working <bet> off come-out`.
+Without the qualifier the statement means what it always meant, so every
+strategy already written reads and plays the same; the qualifier is a third
+field on one variant, not a second shape for the rule editor to learn. **The
+two flags are separate, and their defaults are opposite, because craps' are:** a
+bet is working during a point cycle unless it is called off, and is *not*
+working on the come-out unless it is called on. What that buys, and what it
+costs, is §3.5.
 
 Adding a bet type the engine does not yet model (buy, lay, place-to-lose, hop,
 horn) is one `BetKind` variant plus its resolution arm. It is not a grammar
@@ -392,7 +434,7 @@ the adjudicator:
 | `pass`, `dont pass` | on the come-out only — once the point is on they are refused |
 | `come`, `dont come` | only with a point on |
 | `hard 4/6/8/10` | only with a point on |
-| `place n` | only with a point on, and never on the number that *is* the point |
+| `place n` | only with a point on; on the number that *is* the point only where the table rule allows it (below) |
 | `odds on …` | only with the flat it backs already up, and only where the odds policy allows something behind that point |
 | `field`, `any seven`, `any craps` | any time; they resolve on the next roll whatever it is |
 
@@ -402,14 +444,57 @@ what they back, and a one-roll bet resolves before the question could be
 asked. `pass` and `come` cannot come down once the point is on (`ContractBet`);
 odds always come down, which is most of why they are the best bet on the table.
 
+**And *when* a bet works is two answers, not one.** A place bet or hardway
+carries a point-cycle flag and a come-out flag, set by the two forms of the
+`working` statement (§3.3), and resolution takes them together: a bet resolves
+on a come-out roll only if it is both working and called on for the come-out.
+The conjunction is what makes "off" mean off — a bet the player has taken out
+of play cannot be brought back by a come-out qualifier written later, which
+would otherwise be the one place in the language where a second statement
+could quietly undo the first. The trade it buys is the one made at the rail
+and it is not free: the seven that wins the line takes the working place bets
+with it. Off on the come-out is the default because that is the trade most
+players decline; saying `working place 6 on come-out` is saying you want the
+six live for a roll on which the seven is the most likely total there is.
+
+The two predicates behind this differ in one respect worth stating, because it
+looks like an inconsistency and is not. `place_is_working` short-circuits to
+true when the session's feature mask is empty, since the built-in checkbox
+player has no `working` statement and so no way to have called anything off.
+Its come-out counterpart deliberately does not short-circuit the same way: an
+empty mask there would read as *every* place bet works on *every* come-out,
+which would silently re-price the default player and move every outcome this
+engine has ever pinned. So the come-out predicate requires a feature mask
+before either flag is consulted, and the checkbox player's place bets stay off
+on the come-out exactly as they always were.
+
 One of these diverges from a real casino and does so knowingly: a real table
 will usually sell you the point number as a place bet, and this one refuses it
 unconditionally. Five of the twelve strategies in the expressiveness
 experiment wanted it, and what they played instead diverged in money from what
 they were written to play. That is a modeling choice to close or to argue for,
 not a rule of craps, and it is named here so a strategy that wanted it knows
-why it was refused. It is now also carried as a named deferral in Part II §8,
+why it was refused. It was also carried as a named deferral in Part II §8,
 because a divergence that lives only in a matrix row reads as settled.
+
+*Corrected: the point may be placed, where the table says so.* The paragraph
+above is the argument for closing this rather than for keeping it, and it is
+closed — not by deciding the divergence was fine, but by making it the table's
+answer to give. `place_the_point` is a rule in `Rules` beside the odds policy
+and the field-twelve payout, and `flat_spec` consults it: with the flag set,
+`NumberIsThePoint` is no longer raised for the number that is the point, and
+the bet goes up on top of the line bet already covering it. **The default is
+false**, which preserves this engine's long-standing refusal — the honest
+reason being that the flag moves money in every session that touches it, and
+no saved result should change meaning under somebody's feet because a default
+was flipped.
+
+It follows that a run where the point can be placed is not comparable to one
+where it cannot, so the flag is not a quiet setting. It travels in the Scenario
+Sentence — *the point may be placed*, said only when it is true — and it is
+part of the configuration fingerprint, both the shared one and the Explorer's.
+A fingerprint that ignored it would hand back a cached answer to a different
+question, which is the one failure mode a fingerprint exists to prevent.
 
 ## 4. The Rule
 
@@ -1174,10 +1259,10 @@ running.
 
 | configuration | rules | built-in | compiled | ratio |
 |---|---|---|---|---|
-| pass line | 1 | 22.0 ns | 29.0 ns | 1.32× |
-| 3-point molly | 9 | 34.9 ns | 75.7 ns | 2.15× |
-| loaded table | 27 | 54.6 ns | 197.1 ns | 3.61× |
-| loaded + full press | 27 | 60.3 ns | 204.9 ns | 3.40× |
+| pass line | 1 | 22.3 ns | 30.3 ns | 1.36× |
+| 3-point molly | 9 | 35.3 ns | 76.3 ns | 2.14× |
+| loaded table | 27 | 54.8 ns | 199.3 ns | 3.64× |
+| loaded + full press | 27 | 60.9 ns | 207.9 ns | 3.42× |
 
 Cost scales with rule count at roughly 5 ns per rule per roll, which is what
 a dispatching interpreter costs and is not going to become free. The 1.15×
@@ -1199,10 +1284,18 @@ idle machine, three runs each:
 
 | configuration | before | after | |
 |---|---|---|---|
-| pass line | 29.8 ns | 29.0 ns | −2.7% |
-| 3-point molly | 75.6 ns | 75.7 ns | flat |
-| loaded table | 219.3 ns | 197.1 ns | −10.1% |
-| loaded + full press | 228.4 ns | 204.9 ns | −10.3% |
+| pass line | 29.8 ns | 30.3 ns | +1.7% |
+| 3-point molly | 75.6 ns | 76.3 ns | +0.9% |
+| loaded table | 219.3 ns | 199.3 ns | −9.1% |
+| loaded + full press | 228.4 ns | 207.9 ns | −9.0% |
+
+The small configurations ended up costing a little more than they started,
+and it is worth saying which way each number moved rather than quoting only
+the good one. The loaded gain is the fusion. The small loss is everything
+else this revision added to the paths every strategy walks: the table-limit
+checks on a named amount, the stream a press writes to, the verb a refusal
+carries, the second working flag the come-out arm reads. A one-rule strategy
+walks all of that and gains nothing from a fused guard it does not have.
 
 The built-in player's four figures do not move, which is the result that
 matters most: the checkbox player pays nothing for a language it does not
@@ -1287,6 +1380,11 @@ performance gate green.
   on, and cannot yet say *working on the come-out* — that needs the come-out
   branch of `resolve` to grow place-bet resolution it has never had, and it
   is its own change with its own risk to the pinned outcomes.
+
+  *That gap is closed*, as its own change and structured so the pinned
+  outcomes cannot move (§3.3, §3.5). The come-out branch now resolves place
+  bets and hardways a strategy has called on for it, and the default player
+  reaches none of it.
 
 **Interaction, decided:** a progression sets the stake where the bet
 resolves; a rule may then override it at the decision point. Last write
@@ -1527,21 +1625,10 @@ derived one would be a second, divergent grammar.
 
 ## 8. Deferred
 
-- **Working on the come-out.** `working <bet> off` and `on` ship; *working on
-  the come-out* does not. The come-out branch of `resolve` turns place bets
-  and hardways off unconditionally and has never had a resolution arm for
-  them, so there is nothing for the flag to switch. This is engine work with
-  its own risk to the pinned outcomes, not a grammar change, and it is the one
-  gap P2c left deliberately.
-- **Placing the number that is the point.** A real table will usually sell it
-  to you; this one refuses it unconditionally, as `NumberIsThePoint` in
-  `flat_spec` (§3.5). Five of the twelve strategies in the expressiveness
-  experiment wanted it, and what they played instead diverged in money from
-  what they were written to play — so this is a named divergence from a
-  casino rather than a rule of craps, and it belongs on this list rather than
-  in the legality matrix as though it were settled. Closing it is a resolution
-  question (a place bet on the point number and the line bet behind it both
-  resolving on the same total) before it is a language one.
+Two entries have left this list by being built rather than by being reworded:
+*working on the come-out* (§3.3, §3.5) and *placing the number that is the
+point* (§3.5, now a table rule defaulting to the old refusal). What is left:
+
 - **New bet types** (buy, lay, place-to-lose, hop, horn). One `BetKind` variant
   each plus resolution and a closed-form edge; own milestone.
 - **Record-my-play authoring** — play a session by hand in the Bench and

@@ -46,6 +46,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and computing the destination by hand was the language asking the author
   to do the table's arithmetic. `regress … by` too, and `1 unit` now reads
   as well as `2 units`.
+- **Working on the come-out.** `working place 6 on come-out` — the other half
+  of a question craps has always had two halves to, and the language could
+  only ask one of. A bet is working during a point cycle unless it is called
+  off, and is *not* working on the come-out unless it is called on; the second
+  half was accepted, acknowledged, and then ignored by the table, so the bet
+  sat through the one roll its author had said it should work. The rule
+  editor gets a matching slot.
+- **The table answers for its own rules.** `field-12-triple` and
+  `come-odds-work-on-comeout` are readable, so a strategy whose arithmetic
+  assumes a layout can decline a table that does not have it instead of
+  playing on and reporting the numbers as though it had.
+- **The point may be placed**, where the table allows it — a real one usually
+  will, and this engine refused it from the start. Off by default, because
+  turning it on changes what every strategy that places numbers does; it
+  travels in the Scenario Sentence and in the fingerprint like every other
+  house rule.
+- **`working-on-come-out(place 6)`**, beside the statement that sets it. A
+  language that can say a thing and not ask it back is how the first working
+  asymmetry went unnoticed for two revisions.
 - **`working(place 6)`** and the **`everything`** group — both were in the
   specification and neither was built. A strategy could turn a bet off and
   not ask whether it had; `down everything` sweeps what a dealer would.
@@ -149,8 +168,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rules of the loaded benchmark — had no arm in the guard fuser and compiled
   to general stack code beside a fast-path variant nothing constructed. It
   fuses into one test now: measured as a paired A/B on an idle machine, the
-  loaded configurations run ~10% faster per roll (219 → 197 ns, 228 → 205 ns)
-  and the small ones are flat. The built-in player's figures do not move,
+  loaded configurations run ~9% faster per roll (219 → 199 ns, 228 → 208 ns).
+  The one-rule and nine-rule configurations end up ~1% slower, which is
+  everything else this release added to the path every strategy walks —
+  worth saying in the same breath as the gain. The built-in player's figures do not move,
   which is the number that matters — the checkbox player pays nothing for a
   language it does not speak.
 - **The two proofs the language leans on now run in CI.** The

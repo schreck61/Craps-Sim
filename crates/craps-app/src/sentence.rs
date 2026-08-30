@@ -35,6 +35,7 @@ pub enum FragmentId {
     Horizon,
     Field12,
     ComeOddsComeout,
+    PlaceThePoint,
     Props,
     TableMax,
     Engine,
@@ -132,6 +133,12 @@ pub fn render_spans(cfg: &SimConfig, provenance: Option<&SimConfig>) -> Vec<Span
             "come odds work on come-out".to_owned(),
         ));
     }
+    if cfg.place_the_point {
+        tail.push((
+            FragmentId::PlaceThePoint,
+            "the point may be placed".to_owned(),
+        ));
+    }
     tail.push((
         FragmentId::Props,
         format!("props {}", money_text(cfg.prop_bet_cents, false)),
@@ -200,6 +207,14 @@ pub fn parse(text: &str) -> Result<SimConfig, String> {
         come_odds_work_on_comeout = true;
         at += 1;
     }
+    let mut place_the_point = false;
+    if chunks
+        .get(at)
+        .is_some_and(|c| c.starts_with("the point may"))
+    {
+        place_the_point = true;
+        at += 1;
+    }
     let prop_bet_cents = parse_props(take(&chunks, &mut at, "prop stake")?)?;
     let table_max_mult = parse_table_max(take(&chunks, &mut at, "table max")?)?;
     let (sessions, max_rolls, confidence, explore_sessions, explore_flat_only) =
@@ -222,6 +237,7 @@ pub fn parse(text: &str) -> Result<SimConfig, String> {
         odds_policy,
         field_12_triple,
         come_odds_work_on_comeout,
+        place_the_point,
         prop_bet_cents,
         table_max_mult,
         explore_sessions,
@@ -377,6 +393,7 @@ fn fragment_differs(id: FragmentId, a: &SimConfig, b: &SimConfig) -> bool {
         }
         FragmentId::Field12 => a.field_12_triple != b.field_12_triple,
         FragmentId::ComeOddsComeout => a.come_odds_work_on_comeout != b.come_odds_work_on_comeout,
+        FragmentId::PlaceThePoint => a.place_the_point != b.place_the_point,
         FragmentId::Props => a.prop_bet_cents != b.prop_bet_cents,
         FragmentId::TableMax => a.table_max_mult != b.table_max_mult,
         FragmentId::Strategy => a.strategy != b.strategy || a.odds_policy != b.odds_policy,
@@ -870,6 +887,7 @@ mod tests {
             odds_policy: OddsPolicy::ALL[i % 6],
             field_12_triple: lcg.flag(),
             come_odds_work_on_comeout: lcg.flag(),
+            place_the_point: lcg.flag(),
             prop_bet_cents: PROPS[(i / 5) % 3],
             table_max_mult: MAXES[(i / 4) % 3],
             explore_sessions: EXPLORES[(i / 8) % 3],

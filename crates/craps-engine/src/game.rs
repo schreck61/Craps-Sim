@@ -63,6 +63,18 @@ pub(crate) struct Session<'a, O: RollObserver = Noop, F: Features = NoFeatures> 
     /// no-op, so the pre-roll placement pass can be skipped entirely
     /// (except that one-roll bets always need re-placing).
     pub(crate) needs_placement: bool,
+    /// Whether a place bet or hardway also resolves on a come-out roll.
+    ///
+    /// Separate from `place_working` rather than folded into it, because
+    /// they answer different questions and have different defaults: a bet is
+    /// working during a point cycle unless the player calls it off, and is
+    /// *not* working on the come-out unless the player says so. Craps has
+    /// always had both halves; the language could only say the first.
+    ///
+    /// Never set on the built-in path — nothing there emits the action that
+    /// sets it — so the checkbox player resolves exactly as it always has.
+    pub(crate) place_comeout: [bool; 6],
+    pub(crate) hard_comeout: [bool; 4],
     pub(crate) one_roll_selected: bool,
     // Progression state, one stream per bet type. Come and don't come flats
     // share one stream each (the press applies to the next flat made).
@@ -193,6 +205,8 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
             p_anycraps: ProgState::new(rules.prop_bet_cents),
             place_working: [true; 6],
             hard_working: [true; 4],
+            place_comeout: [false; 6],
+            hard_comeout: [false; 4],
             leaving: false,
             progressions: [sel.progression; STREAMS],
             start_cash: cash,
@@ -823,6 +837,50 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                         }
                     }
                 }
+                // Place bets and hardways a strategy has called on for the
+                // come-out. Off is the default and the arm above is written
+                // for it; this is the other half, which the language could
+                // ask for and the table then ignored — the bet sat there
+                // through the one roll its author had said it should work.
+                //
+                // The seven that wins the line takes them, which is exactly
+                // the trade being made.
+                if t == 7 {
+                    for (i, &num) in PLACE_NUMS.iter().enumerate() {
+                        if self.place[i] > 0 && self.place_works_comeout(i) {
+                            let stake = self.place[i];
+                            self.resolved_wagered_cents += stake;
+                            let base = place_stake(self.min, num);
+                            progs[S_PLACE + i].on_loss(&mut self.p_place[i], base, stake);
+                            self.place[i] = 0;
+                            self.emit(BetKind::Place(num), BetEventKind::Lost, stake);
+                        }
+                    }
+                    for (i, &num) in HARD_NUMS.iter().enumerate() {
+                        if self.hard[i] > 0 && self.hard_works_comeout(i) {
+                            let stake = self.hard[i];
+                            self.resolved_wagered_cents += stake;
+                            progs[S_HARD + i].on_loss(
+                                &mut self.p_hard[i],
+                                self.rules.prop_bet_cents,
+                                stake,
+                            );
+                            self.hard[i] = 0;
+                            self.emit(BetKind::Hardway(num), BetEventKind::Lost, stake);
+                        }
+                    }
+                } else {
+                    if let Some(i) = place_index(t) {
+                        if self.place[i] > 0 && self.place_works_comeout(i) {
+                            self.resolve_place_hit(i, t, &progs);
+                        }
+                    }
+                    if let Some(i) = hard_index(t) {
+                        if self.hard[i] > 0 && self.hard_works_comeout(i) {
+                            self.resolve_hardway(i, t, is_hard, &progs);
+                        }
+                    }
+                }
             }
             Some(point) => {
                 if t == 7 {
@@ -916,84 +974,13 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                 // in place out of (or back into) the player's rail.
                 if let Some(i) = place_index(t) {
                     if self.place[i] > 0 && self.place_is_working(i) {
-                        self.needs_placement = true;
-                        // The winning stake resolves once; the press that
-                        // follows is a fresh placement, not a resolution.
-                        let cur = self.place[i];
-                        let paid = place_win(cur, t);
-                        self.resolved_wagered_cents += cur;
-                        self.cash += paid;
-                        let base = place_stake(self.min, t);
-                        progs[S_PLACE + i].on_win(&mut self.p_place[i], base, paid);
-                        self.emit(
-                            BetKind::Place(t),
-                            BetEventKind::Won {
-                                paid_cents: paid,
-                                // The winner stays up.
-                                stake_returned: false,
-                            },
-                            cur,
-                        );
-                        let desired = self.prog_place_stake(i);
-                        if desired > cur {
-                            if self.try_stake(desired - cur).is_some() {
-                                self.place[i] = desired;
-                                self.emit(BetKind::Place(t), BetEventKind::Placed, desired - cur);
-                            }
-                        } else if desired < cur {
-                            self.cash += cur - desired;
-                            self.place[i] = desired;
-                            self.emit(BetKind::Place(t), BetEventKind::TakenDown, cur - desired);
-                        }
+                        self.resolve_place_hit(i, t, &progs);
                     }
                 }
                 // Hardways: winners stay up, pressed the same way.
                 if let Some(i) = hard_index(t) {
                     if self.hard[i] > 0 && self.hard_is_working(i) {
-                        self.needs_placement = true;
-                        // Resolves on both the hard way (win) and easy way
-                        // (loss); the press after a win is a new placement.
-                        let cur = self.hard[i];
-                        self.resolved_wagered_cents += cur;
-                        let base = self.rules.prop_bet_cents;
-                        if is_hard {
-                            let paid = hardway_win(cur, t);
-                            self.cash += paid;
-                            progs[S_HARD + i].on_win(&mut self.p_hard[i], base, paid);
-                            self.emit(
-                                BetKind::Hardway(t),
-                                BetEventKind::Won {
-                                    paid_cents: paid,
-                                    // The winner stays up.
-                                    stake_returned: false,
-                                },
-                                cur,
-                            );
-                            let desired =
-                                self.prog_stake(self.p_hard[i].stake, base, BetRef::Hardway(t));
-                            if desired > cur {
-                                if self.try_stake(desired - cur).is_some() {
-                                    self.hard[i] = desired;
-                                    self.emit(
-                                        BetKind::Hardway(t),
-                                        BetEventKind::Placed,
-                                        desired - cur,
-                                    );
-                                }
-                            } else if desired < cur {
-                                self.cash += cur - desired;
-                                self.hard[i] = desired;
-                                self.emit(
-                                    BetKind::Hardway(t),
-                                    BetEventKind::TakenDown,
-                                    cur - desired,
-                                );
-                            }
-                        } else {
-                            progs[S_HARD + i].on_loss(&mut self.p_hard[i], base, cur);
-                            self.hard[i] = 0; // easy way loses
-                            self.emit(BetKind::Hardway(t), BetEventKind::Lost, cur);
-                        }
+                        self.resolve_hardway(i, t, is_hard, &progs);
                     }
                 }
 
@@ -1062,6 +1049,102 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
     /// is never loaded. Leaving it as a runtime read cost the loaded table
     /// a third of its throughput, which is what the paired benchmark is for.
     #[inline]
+    /// A place bet's number came. The winner stays up, and the progression
+    /// presses or regresses it in place out of (or back into) the rail.
+    ///
+    /// Extracted so the come-out path and the point-on path resolve a hit
+    /// through one definition. They differ in *when* a bet is working, which
+    /// their callers decide; what a hit is worth is the same question at
+    /// either end of the table, and two answers to it would drift.
+    fn resolve_place_hit(&mut self, i: usize, t: u8, progs: &[Progression; STREAMS]) {
+        self.needs_placement = true;
+        // The winning stake resolves once; the press that follows is a fresh
+        // placement, not a resolution.
+        let cur = self.place[i];
+        let paid = place_win(cur, t);
+        self.resolved_wagered_cents += cur;
+        self.cash += paid;
+        let base = place_stake(self.min, t);
+        progs[S_PLACE + i].on_win(&mut self.p_place[i], base, paid);
+        self.emit(
+            BetKind::Place(t),
+            BetEventKind::Won {
+                paid_cents: paid,
+                // The winner stays up.
+                stake_returned: false,
+            },
+            cur,
+        );
+        let desired = self.prog_place_stake(i);
+        if desired > cur {
+            if self.try_stake(desired - cur).is_some() {
+                self.place[i] = desired;
+                self.emit(BetKind::Place(t), BetEventKind::Placed, desired - cur);
+            }
+        } else if desired < cur {
+            self.cash += cur - desired;
+            self.place[i] = desired;
+            self.emit(BetKind::Place(t), BetEventKind::TakenDown, cur - desired);
+        }
+    }
+
+    /// A hardway's number came, hard or easy. Hard wins and stays up; easy
+    /// loses.
+    fn resolve_hardway(&mut self, i: usize, t: u8, is_hard: bool, progs: &[Progression; STREAMS]) {
+        self.needs_placement = true;
+        let cur = self.hard[i];
+        self.resolved_wagered_cents += cur;
+        let base = self.rules.prop_bet_cents;
+        if !is_hard {
+            progs[S_HARD + i].on_loss(&mut self.p_hard[i], base, cur);
+            self.hard[i] = 0; // easy way loses
+            self.emit(BetKind::Hardway(t), BetEventKind::Lost, cur);
+            return;
+        }
+        let paid = hardway_win(cur, t);
+        self.cash += paid;
+        progs[S_HARD + i].on_win(&mut self.p_hard[i], base, paid);
+        self.emit(
+            BetKind::Hardway(t),
+            BetEventKind::Won {
+                paid_cents: paid,
+                // The winner stays up.
+                stake_returned: false,
+            },
+            cur,
+        );
+        let desired = self.prog_stake(self.p_hard[i].stake, base, BetRef::Hardway(t));
+        if desired > cur {
+            if self.try_stake(desired - cur).is_some() {
+                self.hard[i] = desired;
+                self.emit(BetKind::Hardway(t), BetEventKind::Placed, desired - cur);
+            }
+        } else if desired < cur {
+            self.cash += cur - desired;
+            self.hard[i] = desired;
+            self.emit(BetKind::Hardway(t), BetEventKind::TakenDown, cur - desired);
+        }
+    }
+
+    /// Whether this bet resolves on a come-out roll.
+    ///
+    /// A bet that has been called off is off everywhere, so this is the two
+    /// flags together. `place_is_working` short-circuits to true when there
+    /// are no features, because the checkbox player has no way to call a bet
+    /// off; this one must not, because it would then say every place bet
+    /// works on every come-out and move every outcome this engine has ever
+    /// pinned.
+    #[inline]
+    fn place_works_comeout(&self, i: usize) -> bool {
+        !F::MASK.is_empty() && self.place_working[i] && self.place_comeout[i]
+    }
+
+    #[inline]
+    fn hard_works_comeout(&self, i: usize) -> bool {
+        !F::MASK.is_empty() && self.hard_working[i] && self.hard_comeout[i]
+    }
+
+    #[inline]
     fn place_is_working(&self, i: usize) -> bool {
         F::MASK.is_empty() || self.place_working[i]
     }
@@ -1113,6 +1196,7 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
             start_cash: self.start_cash,
             table_min: self.min,
             table_max: self.table_max,
+            rules: self.rules,
             handle: self.resolved_wagered_cents,
             stakes: Stakes {
                 pass: self.pass,
@@ -1125,6 +1209,8 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                 hard: &self.hard,
                 place_working: &self.place_working,
                 hard_working: &self.hard_working,
+                place_comeout: &self.place_comeout,
+                hard_comeout: &self.hard_comeout,
                 come_points: &self.come_points,
                 come_odds: &self.come_odds,
                 dc_points: &self.dc_points,
@@ -1151,6 +1237,7 @@ mod tests {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 1000,
+            place_the_point: false,
         }
     }
 
@@ -1501,6 +1588,7 @@ mod tests {
         });
         let r = Rules {
             table_max_mult: 4,
+            place_the_point: false,
             ..rules()
         };
         let mut s = Session::new(&sel, &r, 1000, 10_000_000, false);
@@ -1524,6 +1612,7 @@ mod tests {
         });
         let r = Rules {
             table_max_mult: 50,
+            place_the_point: false,
             ..rules()
         };
         let mut net_sum = 0.0;

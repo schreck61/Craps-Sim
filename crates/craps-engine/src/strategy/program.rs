@@ -17,7 +17,7 @@
 //! can run away.
 
 use crate::game::Session;
-use crate::strategy::ast::{AmountExpr, BinOp, Read, Trigger};
+use crate::strategy::ast::{AmountExpr, BinOp, Read, Trigger, WorkingWhen};
 use crate::strategy::view::{Features, Stakes, TableView, STREAMS};
 use crate::strategy::{Action, Amount, BetRef, FeatureMask};
 use crate::trace::RollObserver;
@@ -72,7 +72,7 @@ pub enum Op {
     /// Pop the amount and propose a new stake, lowering only.
     Regress(BetRef, AmountKind),
     Down(BetRef),
-    Working(BetRef, bool),
+    Working(BetRef, bool, WorkingWhen),
     Leave,
 }
 
@@ -283,7 +283,7 @@ pub(crate) enum Proposal {
     /// would lower the bet is not a press, and does nothing.
     Stake(BetRef, Amount, Direction),
     Down(BetRef),
-    Working(BetRef, bool),
+    Working(BetRef, bool, WorkingWhen),
     Leave,
 }
 
@@ -350,6 +350,7 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                 start_cash: self.start_cash,
                 table_min: self.min,
                 table_max: self.table_max,
+                rules: self.rules,
                 handle: self.resolved_wagered_cents,
                 stakes: Stakes {
                     pass: self.pass,
@@ -362,6 +363,8 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                     hard: &self.hard,
                     place_working: &self.place_working,
                     hard_working: &self.hard_working,
+                    place_comeout: &self.place_comeout,
+                    hard_comeout: &self.hard_comeout,
                     come_points: &self.come_points,
                     come_odds: &self.come_odds,
                     dc_points: &self.dc_points,
@@ -389,7 +392,7 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
             let action = match self.proposals.items[i] {
                 Proposal::Bet(b, a) => Action::Bet(b, a),
                 Proposal::Down(b) => Action::Down(b),
-                Proposal::Working(b, on) => Action::Working(b, on),
+                Proposal::Working(b, on, when) => Action::Working(b, on, when),
                 Proposal::Leave => Action::Leave,
                 Proposal::Stake(b, a, dir) => {
                     // `press` and `regress` each mean one direction. The
@@ -510,7 +513,7 @@ fn evaluate<O: RollObserver>(
                 st.vars[i as usize] = v;
             }
             Op::Down(bet) => out.push(Proposal::Down(bet), rule),
-            Op::Working(bet, on) => out.push(Proposal::Working(bet, on), rule),
+            Op::Working(bet, on, when) => out.push(Proposal::Working(bet, on, when), rule),
             Op::Leave => out.push(Proposal::Leave, rule),
             Op::Press(bet, kind) | Op::Regress(bet, kind) => {
                 let value = if kind.takes_operand() { pop!() } else { 0 };
@@ -635,9 +638,12 @@ fn read(v: &TableView<'_>, r: Read) -> i64 {
         Read::BuyIn => v.buy_in(),
         Read::TableMin => v.table_min(),
         Read::TableMax => v.table_max(),
+        Read::Field12Triple => v.field_12_triple(),
+        Read::ComeOddsWorkOnComeout => v.come_odds_work_on_comeout(),
         Read::Stake(b) => v.stake(b),
         Read::Up(b) => v.up(b) as i64,
         Read::Working(b) => v.working(b),
+        Read::WorkingComeOut(b) => v.working_comeout(b),
         Read::LiveCome => v.live_come(),
         Read::LiveDontCome => v.live_dont_come(),
         Read::ComePoint(n) => v.come_point(n),

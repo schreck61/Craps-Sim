@@ -558,6 +558,7 @@ mod tests {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 1000,
+            place_the_point: false,
         };
         let e = |n| bet_edge(EdgeBet::Place(n), &r).as_f64();
         assert_eq!(e(4), e(10));
@@ -580,6 +581,7 @@ mod tests {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 1000,
+            place_the_point: false,
         };
         let outside = bet_edge(EdgeBet::Hardway(4), &r).as_f64();
         let inside = bet_edge(EdgeBet::Hardway(6), &r).as_f64();
@@ -604,6 +606,7 @@ mod tests {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 1000,
+            place_the_point: false,
         }
     }
 
@@ -768,6 +771,7 @@ mod tests {
     fn assert_progressions_hold_edge(base: &BetSelection, bet: EdgeBet, seed0: u64) {
         let r = Rules {
             table_max_mult: 50,
+            place_the_point: false,
             ..rules()
         };
         let want = bet_edge(bet, &r).as_f64();

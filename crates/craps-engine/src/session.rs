@@ -460,6 +460,7 @@ mod tests {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 1000,
+            place_the_point: false,
         }
     }
 
@@ -515,6 +516,7 @@ mod tests {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 500,
+            place_the_point: false,
         };
         let min: i64 = std::env::var("TRACE_MIN")
             .ok()
@@ -736,6 +738,7 @@ mod tests {
             Rules {
                 field_12_triple: true,
                 table_max_mult: 20,
+                place_the_point: false,
                 ..rules()
             },
             Some(15_000),
@@ -935,6 +938,7 @@ mod bench {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 1000,
+            place_the_point: false,
         };
         let mut molly = BetSelection {
             pass_line: true,
@@ -1133,6 +1137,7 @@ mod bench {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 1000,
+            place_the_point: false,
         };
         let n: u64 = 100_000;
         let start = std::time::Instant::now();
@@ -1199,6 +1204,7 @@ mod seed_contract_tests {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 1000,
+            place_the_point: false,
         };
         let horizon = 400;
         for seed in 0..50u64 {
@@ -1226,6 +1232,7 @@ mod seed_contract_tests {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 1000,
+            place_the_point: false,
         };
         for seed in 0..50u64 {
             let short = run_session(&sel, &rules, 1000, 100_000, None, 2_000, 200, seed);

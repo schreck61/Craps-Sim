@@ -269,6 +269,7 @@ mod tests {
             come_odds_work_on_comeout: false,
             prop_bet_cents: 500,
             table_max_mult: 1000,
+            place_the_point: false,
         }
     }
 
@@ -358,6 +359,57 @@ mod tests {
             let t = bench_session(&p, &r, 500, 100_000, None, 300, 300, seed);
             assert_eq!(t.fire_counts[0], 1, "seed {seed}: once, and exactly once");
         }
+    }
+
+    /// A bet called on for the come-out resolves on the come-out.
+    ///
+    /// It did not. `working place 6 on` was accepted, returned `Ok`, set the
+    /// flag — and the come-out arm of `resolve` had no place or hardway
+    /// resolution in it at all, so the bet sat through the one roll its
+    /// author had said it should work. A rule that fires and does nothing,
+    /// which is the failure Principle 4 exists to forbid, and it was the last
+    /// one left.
+    ///
+    /// Tested on the money rather than on a fire count, because a place bet
+    /// stranded on a number that becomes the point can win on the roll that
+    /// makes it — a come-out-looking win that has nothing to do with this.
+    #[test]
+    fn a_bet_working_on_the_come_out_resolves_on_the_come_out() {
+        let r = rules();
+        let body = "on roll when point != 0 and point != 6:\n    bet place 6 base\n";
+        let plain = program(&format!("strategy \"w\" language 1\n{body}"));
+        let comeout = program(&format!(
+            "strategy \"w\" language 1\n{body}on roll:\n    working place 6 on come-out\n"
+        ));
+        // The default scope is the point cycle, and setting it changes
+        // nothing — which is what makes the qualifier the thing that acts.
+        let point_cycle = program(&format!(
+            "strategy \"w\" language 1\n{body}on roll:\n    working place 6 on\n"
+        ));
+
+        let money = |p: &Program, seed: u64| {
+            crate::session::run_program_session(p, &r, 500, 100_000, None, 200_000, 300, seed)
+                .horizon
+                .final_cents
+        };
+        let mut differed = 0;
+        for seed in 0..200u64 {
+            let a = money(&plain, seed);
+            assert_eq!(
+                a,
+                money(&point_cycle, seed),
+                "seed {seed}: turning a bet on for the point cycle it was \
+                 already working in must move nothing"
+            );
+            if a != money(&comeout, seed) {
+                differed += 1;
+            }
+        }
+        assert!(
+            differed > 20,
+            "only {differed} of 200 sessions changed when the 6 was called on \
+             for the come-out; it is not resolving there"
+        );
     }
 
     /// Watching costs nothing that could change what is watched: the Bench

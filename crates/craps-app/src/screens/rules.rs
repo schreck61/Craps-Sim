@@ -22,7 +22,7 @@
 //! otherwise would be building a tree widget nobody asked for.
 
 use craps_engine::strategy::{
-    render, AmountExpr, BinOp, Expr, Read, Rule, Stmt, Strategy, Trigger,
+    render, AmountExpr, BinOp, Expr, Read, Rule, Stmt, Strategy, Trigger, WorkingWhen,
 };
 use craps_engine::{BetRef, HARD_NUMS, PLACE_NUMS};
 use egui::{FontId, RichText, Stroke};
@@ -796,14 +796,18 @@ fn stmt_slots(
 
     let bet_now = match stmt {
         Stmt::Bet(b, _) | Stmt::Press(b, _) | Stmt::Regress(b, _) => Some(*b),
-        Stmt::Down(b) | Stmt::Working(b, _) => Some(*b),
+        Stmt::Down(b) | Stmt::Working(b, _, _) => Some(*b),
         _ => None,
     };
     let amount_now = match stmt {
         Stmt::Bet(_, a) | Stmt::Press(_, a) | Stmt::Regress(_, a) => a.clone(),
         _ => AmountExpr::Pressed,
     };
-    let on_now = matches!(stmt, Stmt::Working(_, true));
+    let on_now = matches!(stmt, Stmt::Working(_, true, _));
+    let when_now = match stmt {
+        Stmt::Working(_, _, w) => *w,
+        _ => WorkingWhen::PointCycle,
+    };
 
     let mut bet = bet_now.unwrap_or(BetRef::Pass);
     if verb != 5 {
@@ -825,6 +829,7 @@ fn stmt_slots(
 
     let mut amount = amount_now;
     let mut on = on_now;
+    let mut when = when_now;
     match verb {
         0..=2 => {
             if verb > 0 {
@@ -846,6 +851,37 @@ fn stmt_slots(
                     }
                 });
             on = sel == 0;
+            // The other half of the working question, and the one craps
+            // actually varies: place bets are off on the come-out unless the
+            // player says otherwise.
+            let mut w = if matches!(when, WorkingWhen::ComeOut) {
+                1
+            } else {
+                0
+            };
+            egui::ComboBox::from_id_salt(("workingwhen", ui.next_auto_id()))
+                .selected_text(if w == 1 {
+                    "on the come-out"
+                } else {
+                    "while a point is on"
+                })
+                .width(170.0)
+                .show_ui(ui, |ui| {
+                    for (i, label) in ["while a point is on", "on the come-out"]
+                        .iter()
+                        .enumerate()
+                    {
+                        if ui.selectable_label(w == i, *label).clicked() {
+                            w = i;
+                            changed = true;
+                        }
+                    }
+                });
+            when = if w == 1 {
+                WorkingWhen::ComeOut
+            } else {
+                WorkingWhen::PointCycle
+            };
         }
         _ => {}
     }
@@ -856,7 +892,7 @@ fn stmt_slots(
             1 => Stmt::Press(bet, amount),
             2 => Stmt::Regress(bet, amount),
             3 => Stmt::Down(bet),
-            4 => Stmt::Working(bet, on),
+            4 => Stmt::Working(bet, on, when),
             _ => Stmt::Leave,
         };
     }
@@ -995,7 +1031,7 @@ mod tests {
             Stmt::Press(BetRef::Place(8), AmountExpr::Cents(Expr::Const(2400))),
             Stmt::Regress(BetRef::Place(8), AmountExpr::Base),
             Stmt::Down(BetRef::Place(5)),
-            Stmt::Working(BetRef::Hardway(6), false),
+            Stmt::Working(BetRef::Hardway(6), false, WorkingWhen::PointCycle),
             Stmt::Leave,
         ] {
             rules.push(Rule::new(Trigger::Roll, vec![stmt]));

@@ -638,6 +638,14 @@ fn right_column(app: &mut App, ui: &mut egui::Ui, focus: Option<FragmentId>) {
 
             ui.label("Come odds on come-out");
             ui.checkbox(&mut app.cfg.come_odds_work_on_comeout, "working");
+            ui.add_space(12.0);
+            ui.label("Place the point:");
+            ui.checkbox(&mut app.cfg.place_the_point, "allowed")
+                .on_hover_text(
+                    "Most tables will sell you a place bet on the number the \
+                     line already covers. Off by default, because turning it \
+                     on changes what every strategy that places numbers does.",
+                );
             ui.end_row();
 
             ui.label("Prop/hardway stake");
