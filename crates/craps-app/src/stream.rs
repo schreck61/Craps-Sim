@@ -426,7 +426,11 @@ impl ExploreRun {
     }
 }
 
-pub fn start_explore_run(cfg: &SimConfig, seed: u64) -> ExploreRun {
+pub fn start_explore_run(
+    cfg: &SimConfig,
+    seed: u64,
+    program: Option<Arc<craps_engine::strategy::Program>>,
+) -> ExploreRun {
     let store = Arc::new(Mutex::new(ExploreStore {
         seed,
         fingerprint: cfg.explore_fingerprint(),
@@ -435,7 +439,7 @@ pub fn start_explore_run(cfg: &SimConfig, seed: u64) -> ExploreRun {
         mins: Vec::new(),
     }));
     let ctl = Arc::new(SweepCtl::default());
-    let explore_cfg = cfg.to_explore(seed);
+    let explore_cfg = cfg.to_explore(seed, program);
     let n_mins = explore_cfg.mins.len() as u64;
     let combos = 11u64 * if explore_cfg.flat_only { 1 } else { 12 } * 4;
     let total_sessions = n_mins * combos * explore_cfg.sessions;
@@ -622,7 +626,7 @@ mod tests {
             table_mins_cents: vec![1000],
             ..Default::default()
         };
-        let run = start_explore_run(&cfg, 0xFACE);
+        let run = start_explore_run(&cfg, 0xFACE, None);
         let deadline = Instant::now() + std::time::Duration::from_secs(60);
         loop {
             {

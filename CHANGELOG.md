@@ -5,6 +5,51 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-08-30
+
+### Added
+
+- **A strategy language.** Betting strategies can now be written, not just
+  ticked: `on <trigger> when <condition>: <actions>`, with pressing declared
+  per bet stream. What the checkbox player could never say — press the 6 on
+  its own second hit, call the place bets off until the shooter makes a
+  point, Martingale the don't pass while the place bets stay flat, stop at
+  −$200 — is now sayable, runnable, and rankable. Design's **Rules** tab
+  builds one from typed slots where a syntax error is not representable, or
+  from text; both edit the same tree, and a round-trip law holds them
+  together. Four worked examples ship under **Examples**; none of them is
+  advice.
+- **The Bench**, on Replay: a strategy's night stepped roll by roll, with
+  every rule that fired marked, every cent attributed to the rule that asked
+  for it or to the table, the session's refusals listed with a way to reach
+  each one, and a fire count per rule so a rule that never fires says so.
+- **Strategies are saved** as plain-text `.craps` files beside the
+  preferences, and the Scenario Sentence carries the one that played by name
+  and content hash — `playing "44 Inside, regressed" #9f3c1a2b`. A pasted
+  sentence naming a strategy whose rules have changed says so rather than
+  running the wrong player.
+- **The Explorer ranks your strategy too**, as its own rows beside the
+  curated eleven, and the **Duel** will run it against any of them on
+  identical dice.
+
+### Fixed
+
+- The odds policy was derived from the bet rail's own `take/lay odds`
+  checkbox, so a strategy asking for maximum odds would have been refused at
+  any table where that box happened to be unticked.
+- Errors are no longer painted in the ink reserved for ruin. A configuration
+  that will not run is a problem, not a bust.
+
+### Changed
+
+- The configuration fingerprint now includes which player is live, so
+  results go stale when the strategy changes. This is a deliberate format
+  change; results computed by earlier builds are not comparable by
+  fingerprint.
+- `BetEventKind::Won` records whether the stake came back, which a ledger
+  needs in order to account for the rail. Place and hardway winners stay up;
+  everything else returns.
+
 ## [0.4.3] - 2026-08-24
 
 ### Fixed

@@ -185,8 +185,13 @@ impl SimConfig {
         }
     }
 
-    pub fn to_explore(&self, base_seed: u64) -> ExploreConfig {
+    pub fn to_explore(
+        &self,
+        base_seed: u64,
+        program: Option<std::sync::Arc<craps_engine::strategy::Program>>,
+    ) -> ExploreConfig {
         ExploreConfig {
+            program,
             rules: self.explore_rules(),
             mins: self.table_mins_cents.clone(),
             budget_cents: self.budget_cents,

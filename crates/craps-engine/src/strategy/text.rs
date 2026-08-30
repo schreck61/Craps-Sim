@@ -1315,6 +1315,69 @@ on roll when profit <= -$200 or profit >= $150:
         assert_eq!(parse(tight).unwrap(), parse(loose).unwrap());
     }
 
+    /// Malformed input never panics and always says something useful.
+    ///
+    /// Not a fuzzer — the parser is not attack surface for a local
+    /// single-user app, and a fuzzing harness would be machinery nobody
+    /// runs. What matters is that a person mistyping a strategy gets a
+    /// sentence rather than a crashed window, and that is checkable
+    /// directly.
+    #[test]
+    fn malformed_input_is_refused_rather_than_fatal() {
+        let good = "strategy \"s\" language 1\non come-out:\n    bet pass\n";
+        let mut cases: Vec<String> = vec![
+            String::new(),
+            " ".into(),
+            "\n\n\n".into(),
+            "strategy".into(),
+            "strategy \"unclosed".into(),
+            "strategy \"s\" language".into(),
+            "strategy \"s\" language one".into(),
+            "strategy \"s\" language 1".into(),
+            "strategy \"s\" language 1\non".into(),
+            "strategy \"s\" language 1\non roll".into(),
+            "strategy \"s\" language 1\non roll:".into(),
+            "strategy \"s\" language 1\non roll: bet".into(),
+            "strategy \"s\" language 1\non roll: bet place".into(),
+            "strategy \"s\" language 1\non roll: bet place 7".into(),
+            "strategy \"s\" language 1\non roll when: bet pass".into(),
+            "strategy \"s\" language 1\non roll when (((: bet pass".into(),
+            "strategy \"s\" language 1\non roll when 1 +: bet pass".into(),
+            "strategy \"s\" language 1\non roll: press pass".into(),
+            "strategy \"s\" language 1\non roll: working pass".into(),
+            "strategy \"s\" language 1\non win of odds on pass: bet pass".into(),
+            "strategy \"s\" language 1\nvar x = \non roll: bet pass".into(),
+            "\u{0}\u{1}\u{7f}".into(),
+            "strategy \"s\" language 1\non roll: bet pass ".to_owned() + &"(".repeat(500),
+            "strategy \"s\" language 1\non roll: bet pass 999999999999999999999".into(),
+        ];
+        // Every truncation of a valid strategy, which is what a half-typed
+        // one looks like.
+        for k in 0..good.len() {
+            cases.push(good[..k].to_owned());
+        }
+        // And every single-byte deletion, which is what a typo looks like.
+        for k in 0..good.len() {
+            let mut c = good.to_owned();
+            c.remove(k);
+            cases.push(c);
+        }
+        for src in cases {
+            match parse(&src) {
+                Ok(s) => {
+                    // Anything that parses must also render and read back.
+                    let text = render(&s);
+                    assert!(parse(&text).is_ok(), "re-read failed for {src:?}");
+                }
+                Err(e) => {
+                    let m = e.message();
+                    assert!(m.starts_with("line "), "{src:?} -> {m}");
+                    assert!(e.line >= 1, "{src:?} -> {m}");
+                }
+            }
+        }
+    }
+
     /// Randomized trees, so the law is tested against shapes nobody thought
     /// to write by hand.
     #[test]

@@ -9,7 +9,9 @@
 
 use std::sync::{Arc, Mutex};
 
+use craps_engine::strategy::Program;
 use craps_engine::trace::trace_wealth;
+use craps_engine::BetSelection;
 use craps_engine::{
     explore_strategies, hexbin, median_ci_sorted, quit_target_cents, run_pair, session_seed,
     HexBin, PairSide, PairedFinal, SeedPhase, SweepCtl, EXPLORE_QUITS,
@@ -94,17 +96,39 @@ impl DuelState {
     }
 }
 
-fn side_of(key: &ComboKey) -> PairSide {
+fn side_of(key: &ComboKey, program: Option<std::sync::Arc<Program>>) -> PairSide {
+    // The authored strategy is not in the curated list and never will be,
+    // so it arrives as a sentinel rather than an index.
+    if key.strategy_idx == craps_engine::AUTHORED_STRATEGY {
+        return PairSide {
+            sel: BetSelection {
+                pass_line: false,
+                ..Default::default()
+            },
+            program,
+            quit_mult: EXPLORE_QUITS[key.quit_idx as usize],
+        };
+    }
     let strategies = explore_strategies();
     let mut sel = strategies[key.strategy_idx as usize].1.clone();
     sel.progression = key.progression;
     PairSide {
         sel,
+        program: None,
         quit_mult: EXPLORE_QUITS[key.quit_idx as usize],
     }
 }
 
 pub(crate) fn combo_name(key: &ComboKey) -> String {
+    if key.strategy_idx == craps_engine::AUTHORED_STRATEGY {
+        return format!(
+            "your strategy · {}",
+            match EXPLORE_QUITS[key.quit_idx as usize] {
+                Some(m) => format!("quit {m:.1}×"),
+                None => "no quit".to_owned(),
+            }
+        );
+    }
     let strategies = explore_strategies();
     format!(
         "{} · {} · {}",
@@ -174,8 +198,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         app.duel.job_ctl = Some(ctl.clone());
         app.duel.job_total = basis.0.explore_sessions.max(500) as u64;
         let (cfg, seed) = basis.clone();
+        let program = app.live_program();
         std::thread::spawn(move || {
-            let data = compute(&cfg, seed, a_key, b_key, &ctl);
+            let data = compute(&cfg, seed, a_key, b_key, program, &ctl);
             *cell.lock().unwrap() = Some(data);
         });
     }
@@ -226,8 +251,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let (a_hi, b_hi, close) = d.quadrants;
     let (cfg, _) = app.duel.basis.clone().unwrap();
     let rules = cfg.explore_rules();
-    let ea = craps_engine::blended_edge(&side_of(&a_key).sel, &rules, a_key.min_cents);
-    let eb = craps_engine::blended_edge(&side_of(&b_key).sel, &rules, b_key.min_cents);
+    // A rule set has no closed form, so an authored side reports no edge
+    // and the verdict falls back to talking about shape. Inventing one
+    // would be exactly the fabricated analytic line §10 of the GUI spec
+    // forbids.
+    let live = app.live_program();
+    let ea =
+        craps_engine::blended_edge(&side_of(&a_key, live.clone()).sel, &rules, a_key.min_cents);
+    let eb = craps_engine::blended_edge(&side_of(&b_key, live).sel, &rules, b_key.min_cents);
     let edge_clause = match (ea, eb) {
         (Some(x), Some(y)) if (x - y).abs() < 1e-4 => {
             "Both have identical per-dollar expectation — the difference is shape.".to_owned()
@@ -280,8 +311,25 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         if app.duel.tracks.is_none() {
             let (cfg, seed) = app.duel.basis.clone().unwrap();
             let s = session_seed(seed, a_key.min_index as u32, SeedPhase::Explore, sess);
+            let live = app.live_program();
             let mk = |key: &ComboKey| {
-                let side = side_of(key);
+                let side = side_of(key, live.clone());
+                if let Some(p) = &side.program {
+                    let quit = side
+                        .quit_mult
+                        .map(|m| quit_target_cents(cfg.budget_cents, m));
+                    let b = craps_engine::strategy::bench_session(
+                        p,
+                        &cfg.explore_rules(),
+                        a_key.min_cents,
+                        cfg.budget_cents,
+                        quit,
+                        cfg.horizon_rolls(),
+                        cfg.horizon_rolls(),
+                        s,
+                    );
+                    return b.rolls.iter().map(|r| r.wealth_after).collect::<Vec<i64>>();
+                }
                 let quit = side
                     .quit_mult
                     .map(|m| quit_target_cents(cfg.budget_cents, m));
@@ -362,10 +410,24 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             if app.duel.dice.is_none() {
                 let (_, basis_seed) = app.duel.basis.clone().unwrap();
                 let s = session_seed(basis_seed, a_key.min_index as u32, SeedPhase::Explore, sess);
-                let side = side_of(&a_key);
+                let side = side_of(&a_key, app.live_program());
                 let quit = side
                     .quit_mult
                     .map(|m| quit_target_cents(cfg.budget_cents, m));
+                if let Some(p) = &side.program {
+                    let b = craps_engine::strategy::bench_session(
+                        p,
+                        &cfg.explore_rules(),
+                        a_key.min_cents,
+                        cfg.budget_cents,
+                        quit,
+                        cfg.horizon_rolls(),
+                        cfg.horizon_rolls(),
+                        s,
+                    );
+                    app.duel.dice = Some(b.as_session_trace().events);
+                    return;
+                }
                 let full = craps_engine::trace::trace_session(
                     &side.sel,
                     &cfg.explore_rules(),
@@ -463,11 +525,12 @@ fn compute(
     seed: u64,
     a_key: ComboKey,
     b_key: ComboKey,
+    program: Option<Arc<Program>>,
     ctl: &SweepCtl,
 ) -> DuelData {
     let pairs = run_pair(
-        &side_of(&a_key),
-        &side_of(&b_key),
+        &side_of(&a_key, program.clone()),
+        &side_of(&b_key, program),
         &cfg.explore_rules(),
         a_key.min_cents,
         a_key.min_index as u32,

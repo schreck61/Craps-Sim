@@ -163,6 +163,13 @@ impl BenchState {
                 self.save_name = entry.name.clone();
                 self.library_note = None;
                 self.build();
+                // A file on disk can be anything — hand-edited, half-saved,
+                // written by an older grammar. Opening it must say what is
+                // wrong with it rather than leave the editor holding text
+                // the app will not run and no reason why.
+                if let Some(e) = &self.error {
+                    self.library_note = Some(format!("\"{}\" did not compile — {e}", entry.name));
+                }
             }
             Err(e) => self.library_note = Some(e),
         }
@@ -743,6 +750,111 @@ mod tests {
     fn an_empty_bench_asks_for_something_to_run() {
         let b = from_source(String::new());
         assert!(b.error.unwrap().contains("Nothing to run"));
+    }
+
+    /// Restored: this and the three below were removed by an over-broad
+    /// edit when the panel split across two screens, and the deletion went
+    /// unnoticed because other tests were being added at the same time.
+    #[test]
+    fn unsaved_work_is_visible_and_saving_settles_it() {
+        let dir = std::env::temp_dir().join("craps-bench-dirty-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let src = "strategy \"Mine\" language 1\non come-out:\n    bet pass\n";
+
+        let mut b = from_source(src.into());
+        assert!(b.dirty(), "typed but never saved");
+
+        // Saving through the store settles it; editing dirties it again.
+        crate::store_strategies::save(&dir, "Mine", &b.source).unwrap();
+        b.saved_source = Some(b.source.clone());
+        assert!(!b.dirty());
+        b.source.push_str("\non seven-out:\n    leave\n");
+        assert!(b.dirty(), "edited after saving");
+
+        // Reading it back settles it and restores the name.
+        let entry = crate::store_strategies::list(&dir)
+            .into_iter()
+            .next()
+            .unwrap();
+        b.load_from(&entry);
+        assert!(!b.dirty());
+        assert_eq!(b.save_name, "Mine");
+        assert_eq!(b.source, src);
+        assert!(b.program.is_some(), "loading compiles what it read");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_empty_editor_is_not_unsaved_work() {
+        let b = BenchState::default();
+        assert!(!b.dirty(), "nothing typed is nothing to lose");
+    }
+
+    /// §10's whole reason for carrying a hash: a sentence naming a strategy
+    /// this machine has under that name but with different rules must say
+    /// so, and one naming a strategy this machine does not have must say
+    /// that — never quietly run something else.
+    #[test]
+    fn a_reference_is_found_changed_or_missing_and_never_guessed() {
+        let dir = crate::store_strategies::strategies_dir().unwrap();
+        let name = "resolve-test-strategy";
+        let src = "strategy \"Mine\" language 1\non come-out:\n    bet pass\n";
+        crate::store_strategies::save(&dir, name, src).unwrap();
+
+        let mut b = from_source(src.into());
+        let here = crate::config::StrategyRef {
+            name: name.to_owned(),
+            hash: crate::config::StrategyRef::of(b.program.as_ref().unwrap()).hash,
+        };
+        assert_eq!(b.resolve(&here), Resolution::Found);
+
+        let elsewhere = crate::config::StrategyRef {
+            name: name.to_owned(),
+            hash: here.hash ^ 0xFFFF,
+        };
+        assert!(matches!(b.resolve(&elsewhere), Resolution::Changed { .. }));
+
+        let absent = crate::config::StrategyRef {
+            name: "no-such-strategy-here".to_owned(),
+            hash: 1,
+        };
+        assert_eq!(b.resolve(&absent), Resolution::Missing);
+
+        let _ = crate::store_strategies::delete(&dir.join(format!("{name}.craps")));
+    }
+
+    /// A file on disk can be anything. Opening a broken one says what is
+    /// wrong with it rather than leaving the editor holding text the app
+    /// will not run and no reason why.
+    #[test]
+    fn a_broken_file_in_the_library_is_refused_in_words() {
+        let dir = std::env::temp_dir().join("craps-bench-broken-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        crate::store_strategies::save(&dir, "Broken", "strategy \"b\" language 1\nnonsense\n")
+            .unwrap();
+        let entry = crate::store_strategies::list(&dir)
+            .into_iter()
+            .next()
+            .unwrap();
+
+        let mut b = BenchState::default();
+        b.load_from(&entry);
+        assert!(b.program.is_none(), "it must not appear to have compiled");
+        let note = b.library_note.expect("a reason");
+        assert!(note.contains("Broken"), "{note}");
+        assert!(note.contains("line"), "{note}");
+        assert!(b.source.contains("nonsense"), "the text is there to fix");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A strategy written under a grammar this build does not know is
+    /// refused, not guessed at.
+    #[test]
+    fn a_future_grammar_is_refused() {
+        let b = from_source("strategy \"future\" language 99\non come-out:\n    bet pass\n".into());
+        let e = b.error.expect("refused");
+        assert!(e.contains("version 99"), "{e}");
+        assert!(b.program.is_none());
     }
 
     #[test]

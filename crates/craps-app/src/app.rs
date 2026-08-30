@@ -222,7 +222,7 @@ impl App {
             return;
         }
         self.last_elapsed = None;
-        self.explore_run = Some(start_explore_run(&self.cfg, self.seed));
+        self.explore_run = Some(start_explore_run(&self.cfg, self.seed, self.live_program()));
         self.mode = Mode::Explorer;
     }
 

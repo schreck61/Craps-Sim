@@ -227,7 +227,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> bool {
             .bench
             .as_ref()
             .and_then(|b| b.fire_counts.get(i).copied());
-        egui::Frame::NONE
+        // The rule's own prose is its accessible name (spec §11): the row
+        // is a dozen widgets, and a screen reader landing on it should hear
+        // the rule, not twelve dropdown labels in a row.
+        let summary = craps_engine::strategy::render_rule(&strategy, i);
+        let frame = egui::Frame::NONE
             .fill(t.surface)
             .stroke(Stroke::new(1.0, t.hairline))
             .corner_radius(6)
@@ -264,6 +268,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> bool {
                 });
                 changed |= rule_row(ui, &t, &mut strategy.rules[i], &strategy.vars);
             });
+        frame.response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Other, true, summary.clone())
+        });
         ui.add_space(4.0);
     }
 

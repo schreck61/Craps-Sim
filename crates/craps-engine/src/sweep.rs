@@ -19,7 +19,7 @@ use rayon::prelude::*;
 use crate::bets::{BetSelection, Progression, Rules};
 use crate::session::{
     run_drawdown_session, run_horizon_session, run_program_drawdown_session, run_program_session,
-    run_session, session_seed, SeedPhase,
+    run_session, session_seed, HorizonOutcome, SeedPhase,
 };
 use crate::stats::{median_ci_sorted, wald_ci_half, Welford};
 use crate::strategy::Program;
@@ -331,8 +331,24 @@ pub struct ExploreRow {
     pub sessions: u64,
 }
 
+/// `strategy_idx` for the authored strategy's own rows.
+///
+/// A sentinel rather than an index, because the strategy is not in the
+/// curated list and never will be: the list is a fixed vocabulary the app
+/// ships, and this is whatever the user wrote this afternoon.
+pub const AUTHORED_STRATEGY: u16 = u16::MAX;
+
 #[derive(Clone, Debug)]
 pub struct ExploreConfig {
+    /// The authored strategy, entered as its own rows so the user can see
+    /// where what they wrote lands among the curated eleven.
+    ///
+    /// One strategy crossed with the four quit rules is four extra combos
+    /// per minimum against 528 — it does not touch the session count, which
+    /// is what the guardrail in `STRATEGY_DSL.md` §11 was protecting. The
+    /// full cross of custom strategies against every progression is what
+    /// that guardrail is for, and it is not this.
+    pub program: Option<std::sync::Arc<Program>>,
     pub rules: Rules,
     pub mins: Vec<i64>,
     pub budget_cents: i64,
@@ -425,6 +441,56 @@ pub fn run_explore(cfg: &ExploreConfig, tx: SyncSender<ExploreMin>, ctl: &SweepC
                 }
             }
         }
+        // The authored strategy's own rows, crossed with the quit rules
+        // only: its pressing is in its rules, so a progression axis would be
+        // asking it to be something it already answers for itself.
+        if let (Some(program), false) = (&cfg.program, cancelled) {
+            for (qi, &quit) in EXPLORE_QUITS.iter().enumerate() {
+                if ctl.stop.load(Ordering::Relaxed) {
+                    cancelled = true;
+                    break;
+                }
+                let quit_cents = quit.map(|m| quit_target_cents(cfg.budget_cents, m));
+                let outs: Vec<(i64, bool, u64)> = (0..cfg.sessions)
+                    .into_par_iter()
+                    .map(|i| {
+                        if ctl.stop.load(Ordering::Relaxed) {
+                            return (0, false, 0);
+                        }
+                        let o = run_program_session(
+                            program,
+                            &cfg.rules,
+                            min,
+                            cfg.budget_cents,
+                            quit_cents,
+                            cfg.horizon_rolls,
+                            cfg.horizon_rolls,
+                            session_seed(cfg.base_seed, mi as u32, SeedPhase::Explore, i),
+                        )
+                        .horizon;
+                        (o.final_cents, o.busted, o.rolls)
+                    })
+                    .collect();
+                ctl.sessions_done.fetch_add(cfg.sessions, Ordering::Relaxed);
+                ctl.rolls_done.fetch_add(
+                    outs.iter().map(|&(_, _, r)| r).sum::<u64>(),
+                    Ordering::Relaxed,
+                );
+                if ctl.stop.load(Ordering::Relaxed) {
+                    cancelled = true;
+                    break;
+                }
+                rows.push(summarize_combo(
+                    AUTHORED_STRATEGY,
+                    "your strategy",
+                    Progression::Flat,
+                    qi as u8,
+                    quit,
+                    cfg.budget_cents,
+                    &outs,
+                ));
+            }
+        }
         if rows.is_empty() && cancelled {
             return;
         }
@@ -497,7 +563,54 @@ fn summarize_combo(
 #[derive(Clone, Debug)]
 pub struct PairSide {
     pub sel: BetSelection,
+    /// The compiled strategy this side plays, when it plays one. `None`
+    /// plays `sel`.
+    ///
+    /// A strategy against the player it was written to beat, on identical
+    /// dice, is the comparison this whole feature is for — and the only
+    /// honest one, which is why the Duel is where it lives rather than a
+    /// second sweep the user would have to trust was fair.
+    pub program: Option<std::sync::Arc<Program>>,
     pub quit_mult: Option<f64>,
+}
+
+impl PairSide {
+    /// One side's horizon session on a given seed, played by whichever
+    /// player this side carries.
+    fn horizon(
+        &self,
+        rules: &Rules,
+        min_cents: i64,
+        budget_cents: i64,
+        quit: Option<i64>,
+        horizon_rolls: u64,
+        seed: u64,
+    ) -> HorizonOutcome {
+        match &self.program {
+            Some(p) => {
+                run_program_session(
+                    p,
+                    rules,
+                    min_cents,
+                    budget_cents,
+                    quit,
+                    horizon_rolls,
+                    horizon_rolls,
+                    seed,
+                )
+                .horizon
+            }
+            None => run_horizon_session(
+                &self.sel,
+                rules,
+                min_cents,
+                budget_cents,
+                quit,
+                horizon_rolls,
+                seed,
+            ),
+        }
+    }
 }
 
 /// One session's ending bankrolls for both sides, under identical dice.
@@ -536,24 +649,8 @@ pub fn run_pair(
                 ctl.sessions_done.fetch_add(256, Ordering::Relaxed);
             }
             let seed = session_seed(base_seed, min_index, SeedPhase::Explore, i);
-            let oa = run_horizon_session(
-                &a.sel,
-                rules,
-                min_cents,
-                budget_cents,
-                quit_a,
-                horizon_rolls,
-                seed,
-            );
-            let ob = run_horizon_session(
-                &b.sel,
-                rules,
-                min_cents,
-                budget_cents,
-                quit_b,
-                horizon_rolls,
-                seed,
-            );
+            let oa = a.horizon(rules, min_cents, budget_cents, quit_a, horizon_rolls, seed);
+            let ob = b.horizon(rules, min_cents, budget_cents, quit_b, horizon_rolls, seed);
             ctl.rolls_done
                 .fetch_add(oa.rolls + ob.rolls, Ordering::Relaxed);
             Some(PairedFinal {
@@ -752,6 +849,7 @@ mod tests {
     #[test]
     fn explorer_rows_carry_cis_and_flush_cleanly() {
         let cfg = ExploreConfig {
+            program: None,
             rules: Rules {
                 odds_policy: OddsPolicy::X345,
                 field_12_triple: false,
@@ -790,6 +888,99 @@ mod tests {
         }
     }
 
+    /// A strategy dueled against the selection it was compiled from must
+    /// come out identical on every session — same dice, same player, so the
+    /// paired difference is zero everywhere.
+    ///
+    /// This is the Duel's own honesty check: if a strategy side and a
+    /// checkbox side were not fed the same dice, this is where it would
+    /// show, and every comparison the Duel makes would be luck-contaminated
+    /// without anyone being able to tell.
+    #[test]
+    fn a_dueled_strategy_matches_the_selection_it_came_from() {
+        use crate::strategy::{compile, from_selection};
+        let mut sel = BetSelection {
+            pass_line: true,
+            take_odds: true,
+            ..Default::default()
+        };
+        sel.set_place(8, true);
+        let rules = Rules {
+            odds_policy: OddsPolicy::X345,
+            field_12_triple: false,
+            come_odds_work_on_comeout: false,
+            prop_bet_cents: 500,
+            table_max_mult: 1000,
+        };
+        let program = std::sync::Arc::new(compile(&from_selection(&sel, &rules)).unwrap());
+        let checkbox = PairSide {
+            sel: sel.clone(),
+            program: None,
+            quit_mult: None,
+        };
+        let authored = PairSide {
+            sel: BetSelection {
+                pass_line: false,
+                ..Default::default()
+            },
+            program: Some(program),
+            quit_mult: None,
+        };
+        let ctl = SweepCtl::default();
+        let pairs = run_pair(
+            &checkbox, &authored, &rules, 1000, 0, 30_000, 500, 400, 0xD0E1, &ctl,
+        );
+        assert_eq!(pairs.len(), 500);
+        for (i, p) in pairs.iter().enumerate() {
+            assert_eq!(p.a_cents, p.b_cents, "session {i} diverged");
+        }
+    }
+
+    /// The authored strategy enters the explorer as its own rows, marked so
+    /// nothing can mistake it for one of the curated eleven.
+    #[test]
+    fn the_explorer_ranks_the_authored_strategy_too() {
+        use crate::strategy::{compile, from_selection};
+        let sel = BetSelection::default();
+        let rules = Rules {
+            odds_policy: OddsPolicy::None,
+            field_12_triple: false,
+            come_odds_work_on_comeout: false,
+            prop_bet_cents: 500,
+            table_max_mult: 1000,
+        };
+        let program = std::sync::Arc::new(compile(&from_selection(&sel, &rules)).unwrap());
+        let cfg = ExploreConfig {
+            program: Some(program),
+            rules,
+            mins: vec![1000],
+            budget_cents: 30_000,
+            sessions: 200,
+            horizon_rolls: 200,
+            flat_only: true,
+            base_seed: 0xE1,
+        };
+        let (tx, rx) = sync_channel::<ExploreMin>(4);
+        let ctl = SweepCtl::default();
+        std::thread::scope(|s| {
+            s.spawn(|| run_explore(&cfg, tx, &ctl));
+            let m = rx.recv().expect("one minimum");
+            let mine: Vec<&ExploreRow> = m
+                .rows
+                .iter()
+                .filter(|r| r.strategy_idx == AUTHORED_STRATEGY)
+                .collect();
+            assert_eq!(mine.len(), EXPLORE_QUITS.len(), "one row per quit rule");
+            assert!(mine.iter().all(|r| r.strategy == "your strategy"));
+            assert!(mine.iter().all(|r| r.sessions == 200));
+            // And it did not displace the curated set.
+            assert_eq!(
+                m.rows.len() - mine.len(),
+                explore_strategies().len() * EXPLORE_QUITS.len()
+            );
+        });
+    }
+
     #[test]
     fn pair_replays_identical_dice() {
         // A strategy dueled against itself must produce identical sides.
@@ -801,6 +992,7 @@ mod tests {
             table_max_mult: 500,
         };
         let side = PairSide {
+            program: None,
             sel: BetSelection::default(),
             quit_mult: Some(2.0),
         };

@@ -2,7 +2,7 @@
 
 ## Craps-Sim Strategy Language — Design Specification & Implementation Plan
 
-**Status:** In progress against v0.5. P0–P6 have landed; §3, §5.2, §6 and
+**Status:** Complete against v0.5. P0–P8 have landed; §3, §5.2, §6 and
 Part II §3 have been corrected against what building them taught, with the
 original claim left visible above each correction.
 
@@ -856,12 +856,37 @@ other cannot hold — is unchanged and tested.
 **P6 — Library and provenance (4.0 dd).** The strategy directory, content
 hashing, sentence-by-reference, STALE-on-hash-mismatch, missing-strategy state.
 
-**P7 — Explorer and Duel (4.0 dd).** S6, custom rows, the opt-in guardrail and
-its caption, per-stream progressions in the Anchor.
+**P7 — Explorer and Duel (4.0 dd). Done, and narrowed.** The Duel runs an
+authored strategy against any curated combination on identical dice, which is
+the honest paired comparison and the valuable half of this milestone; a
+strategy dueled against the selection it was compiled from is proven identical
+on every session, which is the pairing checking itself. The Explorer enters the
+strategy as its own rows beside the curated eleven — crossed with the quit
+rules only, because its pressing is in its rules and a progression axis would
+ask it to be something it already answers for itself.
 
-**P8 — Hardening and release (5.0 dd).** Accessibility of the editor (keyboard
-path through every slot, AccessKit summaries per rule), fuzzing the parser,
-malformed-library states, CHANGELOG, v0.5.0.
+**Narrowed against the original plan:** custom strategies crossed with every
+progression, and the combinatorial guardrail that would then be needed, are
+deferred past v0.5. Four extra combinations per minimum against 528 does not
+touch the session count, which is what that guardrail existed to protect; a
+full cross would, and nothing yet asks for one. A strategy has no closed form,
+so an authored side reports no edge rather than an invented one and the Duel's
+verdict talks about shape where it cannot talk about cost.
+
+**P8 — Hardening and release (5.0 dd). Done.** Every rule row exposes its own
+prose as its accessible name, because a row is a dozen widgets and a screen
+reader landing on it should hear the rule rather than twelve dropdown labels.
+A file in the library can be anything — hand-edited, half-saved, written
+against a grammar this build does not know — so opening a broken one says what
+is wrong with it and leaves the text in the editor to be fixed. CHANGELOG and
+v0.5.0.
+
+**Parser fuzzing, replaced with something that runs.** A fuzzing harness for a
+local single-user app's strategy parser is machinery nobody would run again.
+What matters is that a person mistyping a strategy gets a sentence rather than
+a crashed window, so the test asserts exactly that over every truncation and
+every single-byte deletion of a valid strategy, plus the malformed shapes worth
+naming: nothing panics, and every refusal names its line.
 
 **Total: 52 developer-days.** P0–P3 (23 dd) is the load-bearing half and carries
 zero user-visible risk; everything after is interface.
