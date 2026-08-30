@@ -216,10 +216,27 @@ shadows an outer one.
 
 A binding is not memory. It is a number the parser substitutes while reading
 the block, so what comes out is exactly the rules somebody would otherwise
-have typed six times — which is why it does not survive rendering, and why
-the round-trip law is unaffected by it. A name already used for a memory slot
-is refused rather than shadowed, because the two are different things and
-sharing a name would hide that.
+have typed six times. A name already used for a memory slot is refused rather
+than shadowed, because the two are different things and sharing a name would
+hide that.
+
+**The block survives, and stops surviving honestly.** A strategy records the
+block beside the rules it produced — its name, its values, and its own text
+verbatim, comments and spacing included. Whether it is *still* a block is
+never remembered: it is asked, by re-reading that text once per value and
+comparing to the rules sitting there. So the three cases fall out with no
+flag that can disagree with reality:
+
+- folded, and edited as a block — the edit reaches every iteration, they
+  still agree, it stays a block;
+- unfolded and looked at — nothing changed, so it is still a block;
+- unfolded and edited apart — two iterations now differ, so they are not one
+  rule, and it stops being drawn or written as one.
+
+A record that has stopped being true is pruned before rendering, which is why
+`parse(render(s)) == s` remains a law rather than failing on a claim that had
+already expired. Rewriting the block is the way back, which is honest:
+at that point it genuinely is not one rule any more.
 
 ## 5. Two Editors, One AST
 

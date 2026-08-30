@@ -60,49 +60,72 @@ impl ParseError {
 struct Token {
     text: String,
     line: usize,
+    /// Byte offset of the token's first character in the original source.
+    ///
+    /// Carried so a `for each` block can keep its own text verbatim —
+    /// comments and spacing included. Reconstructing the block from the
+    /// rules it produced would normalise both away, and a strategy that
+    /// silently loses the author's comments on every save is not preserving
+    /// anything worth the name.
+    start: usize,
 }
 
 fn tokenize(src: &str) -> Vec<Token> {
     let mut out = Vec::new();
-    for (n, raw) in src.lines().enumerate() {
+    let mut line_start = 0usize;
+    for (n, whole) in src.split_inclusive('\n').enumerate() {
         let line = n + 1;
+        let raw = whole.trim_end_matches(['\n', '\r']);
         let text = raw.split('#').next().unwrap_or("");
-        let bytes: Vec<char> = text.chars().collect();
+        let cs: Vec<char> = text.chars().collect();
+        // Byte offset of each character in the line, plus one past the end.
+        let offs: Vec<usize> = text
+            .char_indices()
+            .map(|(b, _)| b)
+            .chain(std::iter::once(text.len()))
+            .collect();
+        let byte = |i: usize| line_start + offs.get(i).copied().unwrap_or(text.len());
+        let push = |out: &mut Vec<Token>, s: String, from: usize| {
+            out.push(Token {
+                text: s,
+                line,
+                start: byte(from),
+            })
+        };
+
         let mut i = 0;
-        while i < bytes.len() {
-            let c = bytes[i];
+        while i < cs.len() {
+            let c = cs[i];
             if c.is_whitespace() {
                 i += 1;
                 continue;
             }
+            let from = i;
             // A quoted name is one token, quotes included, so a strategy may
             // be called anything a person would call it.
             if c == '"' {
                 let mut s = String::from('"');
                 i += 1;
-                while i < bytes.len() && bytes[i] != '"' {
-                    s.push(bytes[i]);
+                while i < cs.len() && cs[i] != '"' {
+                    s.push(cs[i]);
                     i += 1;
                 }
                 s.push('"');
                 i += 1;
-                out.push(Token { text: s, line });
+                push(&mut out, s, from);
                 continue;
             }
             // Two-character comparisons before one-character ones.
-            if i + 1 < bytes.len() {
-                let pair: String = bytes[i..i + 2].iter().collect();
+            if i + 1 < cs.len() {
+                let pair: String = cs[i..i + 2].iter().collect();
                 if matches!(pair.as_str(), "<=" | ">=" | "==" | "!=") {
-                    out.push(Token { text: pair, line });
+                    push(&mut out, pair, from);
                     i += 2;
                     continue;
                 }
             }
-            if "():,=<>+*/".contains(c) {
-                out.push(Token {
-                    text: c.to_string(),
-                    line,
-                });
+            if "():,=<>+*/{}".contains(c) {
+                push(&mut out, c.to_string(), from);
                 i += 1;
                 continue;
             }
@@ -110,78 +133,61 @@ fn tokenize(src: &str) -> Vec<Token> {
             // are handled by the identifier scan below, which is why the
             // operator needs its spaces.
             if c == '-' {
-                if bytes.get(i + 1).is_some_and(|d| d.is_ascii_digit()) {
-                    let start = i;
+                if cs.get(i + 1).is_some_and(|d| d.is_ascii_digit()) {
                     i += 1;
-                    while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == '.') {
+                    while i < cs.len() && (cs[i].is_ascii_digit() || cs[i] == '.') {
                         i += 1;
                     }
-                    out.push(Token {
-                        text: bytes[start..i].iter().collect(),
-                        line,
-                    });
+                    push(&mut out, cs[from..i].iter().collect(), from);
                 } else {
-                    out.push(Token {
-                        text: "-".into(),
-                        line,
-                    });
+                    push(&mut out, "-".into(), from);
                     i += 1;
                 }
                 continue;
             }
             if c == '$' || c.is_ascii_digit() {
-                let start = i;
                 let money = c == '$';
                 if money {
                     i += 1;
                 }
                 // Thousands separators belong to money and nowhere else: a
                 // bare `9267,` inside `max(9267, x)` is a number and a comma.
-                while i < bytes.len()
-                    && (bytes[i].is_ascii_digit() || bytes[i] == '.' || (money && bytes[i] == ','))
+                while i < cs.len()
+                    && (cs[i].is_ascii_digit() || cs[i] == '.' || (money && cs[i] == ','))
                 {
                     i += 1;
                 }
                 // `1-3-2-6` is the name of a progression, not three
                 // subtractions, so a number that runs straight into a hyphen
                 // and more digits keeps going.
-                while i + 1 < bytes.len() && bytes[i] == '-' && bytes[i + 1].is_ascii_digit() {
+                while i + 1 < cs.len() && cs[i] == '-' && cs[i + 1].is_ascii_digit() {
                     i += 1;
-                    while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    while i < cs.len() && cs[i].is_ascii_digit() {
                         i += 1;
                     }
                 }
-                out.push(Token {
-                    text: bytes[start..i].iter().collect(),
-                    line,
-                });
+                push(&mut out, cs[from..i].iter().collect(), from);
                 continue;
             }
             if c.is_alphabetic() || c == '_' {
-                let start = i;
-                while i < bytes.len()
-                    && (bytes[i].is_alphanumeric()
-                        || bytes[i] == '_'
-                        || bytes[i] == '\''
-                        || (bytes[i] == '-'
-                            && bytes
+                while i < cs.len()
+                    && (cs[i].is_alphanumeric()
+                        || cs[i] == '_'
+                        || cs[i] == '\''
+                        || (cs[i] == '-'
+                            && cs
                                 .get(i + 1)
                                 .is_some_and(|d| d.is_alphanumeric() || *d == '_')))
                 {
                     i += 1;
                 }
-                out.push(Token {
-                    text: bytes[start..i].iter().collect(),
-                    line,
-                });
+                push(&mut out, cs[from..i].iter().collect(), from);
                 continue;
             }
-            out.push(Token {
-                text: c.to_string(),
-                line,
-            });
+            push(&mut out, c.to_string(), from);
             i += 1;
         }
+        line_start += whole.len();
     }
     out
 }
@@ -192,6 +198,15 @@ struct Parser {
     toks: Vec<Token>,
     at: usize,
     vars: Vec<String>,
+    /// The source, kept so a block can record its own text verbatim.
+    src: String,
+    /// Blocks recorded while reading, in the order they appeared. Only the
+    /// outermost: a nested block is already inside its parent's verbatim
+    /// text, and recording both would leave two records claiming the same
+    /// starting rule.
+    blocks: Vec<crate::strategy::ast::Block>,
+    /// How many `for each` blocks are currently open.
+    depth: usize,
     /// Names bound by an enclosing `for each`, innermost last.
     ///
     /// A binding is not memory: it is a number the parser substitutes while
@@ -678,10 +693,17 @@ impl Parser {
 
     /// Rules until the end of input, or until a `}` closes a block.
     fn rules_until_end(&mut self) -> Result<Vec<Rule>, ParseError> {
+        self.rules_from(0)
+    }
+
+    /// `base` is how many rules already precede these in the strategy, so a
+    /// nested block can record where its own rules land.
+    fn rules_from(&mut self, base: usize) -> Result<Vec<Rule>, ParseError> {
         let mut out = Vec::new();
         while !self.done() && self.peek() != "}" {
             if self.peek().eq_ignore_ascii_case("for") {
-                out.extend(self.for_each()?);
+                let so_far = base + out.len();
+                out.extend(self.for_each(so_far)?);
             } else {
                 out.push(self.rule()?);
             }
@@ -729,7 +751,7 @@ impl Parser {
     /// It is sugar, and it does not survive rendering: the tree holds the
     /// expanded rules, the same way a group of bets does, because the tree
     /// is what the round-trip law is about.
-    fn for_each(&mut self) -> Result<Vec<Rule>, ParseError> {
+    fn for_each(&mut self, rules_so_far: usize) -> Result<Vec<Rule>, ParseError> {
         self.expect("for")?;
         self.expect("each")?;
         self.expect("of")?;
@@ -755,24 +777,59 @@ impl Parser {
                     .into(),
             });
         }
+        // Just past the brace, not at the first token inside it: comments
+        // are not tokens, so starting at the first rule would drop any note
+        // the author wrote at the top of the block.
+        let body_from = self
+            .toks
+            .get(self.at)
+            .map(|t| t.start + 1)
+            .unwrap_or_default();
         self.expect("{")?;
+        self.depth += 1;
         let body_start = self.at;
 
         let mut out = Vec::new();
-        for v in values {
+        let mut per_iteration = 0usize;
+        for (k, v) in values.iter().enumerate() {
             self.at = body_start;
-            self.bindings.push((name.clone(), v));
+            self.bindings.push((name.clone(), *v));
             let rules = self.rules_until_end();
             self.bindings.pop();
-            out.extend(rules?);
+            let rules = rules?;
+            if k == 0 {
+                per_iteration = rules.len();
+            }
+            out.extend(rules);
             if self.peek() != "}" {
                 return self.err("expected \"}\" to close the block");
             }
         }
+        // The body's own text, from just after `{` to just before `}`.
+        let body_to = self.toks[self.at].start;
+        // Stored without the newlines that hug the braces, so writing it
+        // back out as `{\n…\n}` reproduces exactly this text and rendering
+        // stays idempotent. Everything between — comments, indentation,
+        // blank lines the author put there — is kept.
+        let body = self.src[body_from..body_to]
+            .trim_matches('\n')
+            .trim_end()
+            .to_owned();
         self.expect("}")?;
+        self.depth -= 1;
         if out.is_empty() {
             return self.err("a block with no rules does nothing");
         }
+        if self.depth > 0 {
+            return Ok(out);
+        }
+        self.blocks.push(crate::strategy::ast::Block {
+            name,
+            values,
+            body,
+            start: rules_so_far,
+            len: per_iteration,
+        });
         Ok(out)
     }
 
@@ -855,6 +912,9 @@ impl Parser {
 pub fn parse(src: &str) -> Result<Strategy, ParseError> {
     let mut p = Parser {
         toks: tokenize(src),
+        src: src.to_owned(),
+        blocks: Vec::new(),
+        depth: 0,
         at: 0,
         vars: Vec::new(),
         bindings: Vec::new(),
@@ -920,7 +980,8 @@ pub fn parse(src: &str) -> Result<Strategy, ParseError> {
         }
     }
 
-    let rules = p.rules_until_end()?;
+    let rules = p.rules_from(0)?;
+    let blocks = std::mem::take(&mut p.blocks);
 
     if rules.is_empty() {
         return p.err("a strategy with no rules never bets");
@@ -931,6 +992,7 @@ pub fn parse(src: &str) -> Result<Strategy, ParseError> {
         vars: p.vars,
         rules,
         progressions,
+        blocks,
     })
 }
 
@@ -1160,6 +1222,68 @@ fn stmt_text(s: &Stmt, vars: &[String]) -> String {
     }
 }
 
+/// Whether a block still describes the rules sitting where it produced
+/// them — asked, never remembered.
+///
+/// Re-reads the block's own text once per value and compares. A block left
+/// alone still holds; one whose iterations have been edited apart does not,
+/// and stops being a block at that moment without anything having to notice.
+pub fn block_holds(s: &Strategy, b: &crate::strategy::ast::Block) -> bool {
+    let span = b.len * b.values.len();
+    if b.len == 0 || b.start + span > s.rules.len() {
+        return false;
+    }
+    for (k, v) in b.values.iter().enumerate() {
+        let src = format!(
+            "strategy \"x\" language {LANGUAGE_VERSION}\nfor each of {v} as {} {{\n{}\n}}\n",
+            b.name, b.body
+        );
+        let Ok(mut one) = parse(&src) else {
+            return false;
+        };
+        one.vars.clone_from(&s.vars);
+        // Re-parsing without the strategy's memory declared would fail on
+        // any rule that touches it, so parse again with them in scope.
+        let src = format!(
+            "strategy \"x\" language {LANGUAGE_VERSION}\n{}\nfor each of {v} as {} {{\n{}\n}}\n",
+            s.vars
+                .iter()
+                .map(|n| format!("var {n} = 0"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            b.name,
+            b.body
+        );
+        let Ok(one) = parse(&src) else {
+            return false;
+        };
+        if one.rules.len() != b.len {
+            return false;
+        }
+        let here = &s.rules[b.start + k * b.len..b.start + (k + 1) * b.len];
+        if one.rules != here {
+            return false;
+        }
+    }
+    true
+}
+
+/// Drop blocks that no longer describe their rules.
+///
+/// Called before rendering, so a strategy whose iterations were edited
+/// apart writes itself out as the rules it now is — and so
+/// `parse(render(s)) == s` stays a law rather than failing on a record that
+/// had already stopped being true.
+pub fn prune_blocks(s: &mut Strategy) {
+    let kept: Vec<_> = s
+        .blocks
+        .iter()
+        .filter(|b| block_holds(s, b))
+        .cloned()
+        .collect();
+    s.blocks = kept;
+}
+
 /// Write a strategy out in the form [`parse`] reads back.
 pub fn render(s: &Strategy) -> String {
     let mut out = format!("strategy \"{}\" language {LANGUAGE_VERSION}\n", s.name);
@@ -1190,7 +1314,27 @@ pub fn render(s: &Strategy) -> String {
         }
     }
 
-    for r in &s.rules {
+    // Rules in order, except where a block still describes a run of them —
+    // then the block, in the words it was written in.
+    let mut held = s.clone();
+    prune_blocks(&mut held);
+    let mut i = 0usize;
+    while i < s.rules.len() {
+        if let Some(b) = held.blocks.iter().find(|b| b.start == i) {
+            out += &format!(
+                "\nfor each of {} as {} {{\n{}\n}}\n",
+                b.values
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                b.name,
+                b.body
+            );
+            i += b.len * b.values.len();
+            continue;
+        }
+        let r = &s.rules[i];
         out += &format!("\non {}", trigger_text(r.trigger));
         if let Some(g) = &r.guard {
             out += &format!(" when {}", expr_text(g, &s.vars));
@@ -1199,6 +1343,7 @@ pub fn render(s: &Strategy) -> String {
         for st in &r.body {
             out += &format!("    {}\n", stmt_text(st, &s.vars));
         }
+        i += 1;
     }
     out
 }
@@ -1264,6 +1409,11 @@ mod tests {
 
     /// The law. Everything else in this module exists to keep it true.
     fn round_trip(s: &Strategy) {
+        // A block record that has stopped being true is not part of what
+        // the text says, so the law is stated over the pruned strategy.
+        let mut s = s.clone();
+        prune_blocks(&mut s);
+        let s = &s;
         let text = render(s);
         let back = parse(&text)
             .unwrap_or_else(|e| panic!("{}\n--- could not read back ---\n{text}", e.message()));
@@ -1395,12 +1545,22 @@ on roll when profit <= -$200 or profit >= $150:
              on roll when come-point(10):\n    bet odds on come 10 max\n",
         )
         .unwrap();
-        assert_eq!(s, long, "a block is the rules, not a different thing");
+        // The rules are the same rules. The strategies differ in one way
+        // and only one: the block records that a person wrote them once,
+        // which is exactly the thing that must survive a save and a reload.
+        assert_eq!(s.rules, long.rules, "a block is the rules it produces");
+        assert!(long.blocks.is_empty());
+        assert_eq!(s.blocks.len(), 1);
 
-        // And it is sugar: it does not survive rendering, so the law holds
-        // over the tree rather than over the spelling.
+        // And it comes back out as a block, not as the six rules it stands
+        // for — which is the difference between sugar that is preserved and
+        // sugar that is merely accepted.
         round_trip(&s);
-        assert!(!render(&s).contains("for each"));
+        assert!(
+            render(&s).contains("for each of 4, 5, 6, 8, 9, 10 as n"),
+            "the block did not survive rendering:\n{}",
+            render(&s)
+        );
     }
 
     #[test]
@@ -1416,7 +1576,12 @@ on roll when profit <= -$200 or profit >= $150:
         )
         .unwrap_or_else(|e| panic!("{}", e.message()));
         assert_eq!(s.rules.len(), 6);
-        let text = render(&s);
+        // The binding reached every position: check the tree, because the
+        // text now shows the block rather than what it expanded to.
+        let expanded = render(&Strategy {
+            blocks: Vec::new(),
+            ..s.clone()
+        });
         for want in [
             "on win of place 6 when hits-this-shooter(6) <= 2",
             "press place 6 to stake(place 6) * 2",
@@ -1424,8 +1589,10 @@ on roll when profit <= -$200 or profit >= $150:
             "bet hard 8",
             "on roll when point != 8",
         ] {
-            assert!(text.contains(want), "missing {want:?} in\n{text}");
+            assert!(expanded.contains(want), "missing {want:?} in\n{expanded}");
         }
+        // And the written form is what comes back.
+        assert!(render(&s).contains("for each of 6, 8 as n"));
         round_trip(&s);
     }
 
@@ -1441,9 +1608,21 @@ on roll when profit <= -$200 or profit >= $150:
         )
         .unwrap_or_else(|e| panic!("{}", e.message()));
         assert_eq!(s.rules.len(), 4, "two outer times two inner");
-        let text = render(&s);
-        assert!(text.contains("point != 6 and point != 4"), "{text}");
-        assert!(text.contains("point != 8 and point != 10"), "{text}");
+        // Only the outer block is recorded; the inner one lives inside its
+        // text. Two records claiming rule 0 would render as the inner block
+        // followed by loose rules.
+        assert_eq!(s.blocks.len(), 1);
+        assert_eq!(s.blocks[0].name, "a");
+        let expanded = render(&Strategy {
+            blocks: Vec::new(),
+            ..s.clone()
+        });
+        assert!(expanded.contains("point != 6 and point != 4"), "{expanded}");
+        assert!(
+            expanded.contains("point != 8 and point != 10"),
+            "{expanded}"
+        );
+        round_trip(&s);
     }
 
     #[test]
@@ -1477,6 +1656,59 @@ on roll when profit <= -$200 or profit >= $150:
 
     /// The two gaps the ergonomics assessment found in the vocabulary,
     /// and what they let a strategy say now.
+    /// The whole point of recording a block: it survives being written,
+    /// saved, read back and looked at — and stops existing the moment its
+    /// iterations stop agreeing, without anything having to notice.
+    #[test]
+    fn sugar_survives_a_look_and_dissolves_on_a_real_edit() {
+        let src = "strategy \"s\" language 1\n\
+                   for each of 6, 8 as n {\n\
+                       # press it twice, then take the winnings\n\
+                       on win of place n:\n\
+                           press place n to stake(place n) * 2\n\
+                   }\n";
+        let s = parse(src).unwrap_or_else(|e| panic!("{}", e.message()));
+        assert_eq!(s.rules.len(), 2);
+        assert_eq!(s.blocks.len(), 1);
+        assert!(block_holds(&s, &s.blocks[0]));
+
+        // Written out and read back: still a block, comment included.
+        let text = render(&s);
+        assert!(text.contains("for each of 6, 8 as n"), "{text}");
+        assert!(
+            text.contains("# press it twice, then take the winnings"),
+            "the author's comment did not survive:\n{text}"
+        );
+        assert_eq!(parse(&text).unwrap(), s);
+
+        // Unfolded and left alone — nothing changed, so it is still a block.
+        let mut looked = s.clone();
+        let rules = looked.rules.clone();
+        looked.rules = rules;
+        assert!(block_holds(&looked, &looked.blocks[0]));
+        assert!(render(&looked).contains("for each"));
+
+        // Edited apart: one iteration now presses differently.
+        let mut edited = s.clone();
+        edited.rules[1].body = vec![Stmt::Regress(BetRef::Place(8), AmountExpr::Base)];
+        assert!(
+            !block_holds(&edited, &edited.blocks[0]),
+            "two iterations that differ are not one rule"
+        );
+        let text = render(&edited);
+        assert!(
+            !text.contains("for each"),
+            "the block outlived its truth:\n{text}"
+        );
+        assert!(text.contains("regress place 8 to base"), "{text}");
+
+        // And the stale record is pruned, so the law still holds over it.
+        let mut pruned = edited.clone();
+        prune_blocks(&mut pruned);
+        assert!(pruned.blocks.is_empty());
+        assert_eq!(parse(&render(&pruned)).unwrap(), pruned);
+    }
+
     #[test]
     fn a_come_point_and_a_payout_can_be_named() {
         let s = parse(
@@ -1761,6 +1993,7 @@ on roll when profit <= -$200 or profit >= $150:
                 vars,
                 rules,
                 progressions,
+                blocks: Vec::new(),
             };
             round_trip(&s);
         }

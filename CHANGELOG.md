@@ -39,7 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`for each of 4, 5, 6, 8, 9, 10 as n { … }`** — a rule written once and
   produced per number. 3-Point Molly was nine rules, six of them the same
   rule with a different number in it; it is four now. Blocks nest, and the
-  binding reaches anywhere a number can go.
+  binding reaches anywhere a number can go. The editor draws a block as one
+  card and can unfold it; looking changes nothing, and the block stops being
+  a block only when two of its iterations are actually edited apart.
 
 ### Fixed
 

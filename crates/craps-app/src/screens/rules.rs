@@ -203,6 +203,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> bool {
     let mut changed = false;
     let mut delete: Option<usize> = None;
     let mut move_up: Option<usize> = None;
+    // A block that still describes its rules is drawn as one card. Whether
+    // it does is asked, never remembered, so unfolding to look costs
+    // nothing and editing two iterations apart dissolves it by itself.
+    craps_engine::strategy::prune_blocks(&mut strategy);
+    let unfolded: std::collections::HashSet<usize> = ui.ctx().data(|d| {
+        d.get_temp::<std::collections::HashSet<usize>>(egui::Id::new("rules_unfolded"))
+            .unwrap_or_default()
+    });
 
     ui.horizontal(|ui| {
         ui.label(
@@ -222,7 +230,28 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> bool {
     });
     ui.add_space(6.0);
 
-    for i in 0..strategy.rules.len() {
+    let mut i = 0usize;
+    while i < strategy.rules.len() {
+        if let Some(b) = strategy
+            .blocks
+            .iter()
+            .find(|b| b.start == i)
+            .filter(|b| !unfolded.contains(&b.start))
+            .cloned()
+        {
+            let span = b.len * b.values.len();
+            let fired: u32 = (i..i + span)
+                .filter_map(|k| {
+                    app.replay
+                        .bench
+                        .as_ref()
+                        .and_then(|x| x.fire_counts.get(k).copied())
+                })
+                .sum();
+            changed |= block_card(app, ui, &t, &b, fired, span);
+            i += span;
+            continue;
+        }
         let fired = app
             .replay
             .bench
@@ -273,6 +302,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> bool {
             egui::WidgetInfo::labeled(egui::WidgetType::Other, true, summary.clone())
         });
         ui.add_space(4.0);
+        i += 1;
     }
 
     ui.horizontal(|ui| {
@@ -300,6 +330,88 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> bool {
         app.bench.source = render(&strategy);
         app.bench.build();
     }
+    changed
+}
+
+/// A `for each` block, drawn as the one thing it was written as.
+///
+/// Unfolding does not destroy it: the fold is a view, and the block goes on
+/// existing for exactly as long as its iterations still agree. Edit two of
+/// them apart and it stops being one rule — at which point it stops being
+/// drawn as one, and rewriting it is the honest way back.
+fn block_card(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    t: &crate::ui::theme::Theme,
+    b: &craps_engine::strategy::Block,
+    fired: u32,
+    span: usize,
+) -> bool {
+    let mut changed = false;
+    egui::Frame::NONE
+        .fill(t.surface)
+        .stroke(Stroke::new(1.0, t.hairline_strong))
+        .corner_radius(6)
+        .inner_margin(8.0)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "for each of {} as {}",
+                        b.values
+                            .iter()
+                            .map(|v| v.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        b.name
+                    ))
+                    .font(FontId::new(type_scale::BODY, theme::mono()))
+                    .color(t.ink),
+                );
+                ui.label(
+                    RichText::new(format!("{span} rules"))
+                        .font(FontId::new(type_scale::CAPTION, theme::sans()))
+                        .color(t.ink2),
+                );
+                if app.replay.bench.is_some() {
+                    ui.label(
+                        RichText::new(format!("{fired}× last night"))
+                            .font(FontId::new(type_scale::CAPTION, theme::mono()))
+                            .color(t.ink2),
+                    );
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button("unfold")
+                        .on_hover_text(
+                            "Show the rules it stands for. Looking changes nothing; \
+                             editing two of them apart is what makes them separate rules.",
+                        )
+                        .clicked()
+                    {
+                        let id = egui::Id::new("rules_unfolded");
+                        ui.ctx().data_mut(|d| {
+                            let mut set = d
+                                .get_temp::<std::collections::HashSet<usize>>(id)
+                                .unwrap_or_default();
+                            set.insert(b.start);
+                            d.insert_temp(id, set);
+                        });
+                    }
+                });
+            });
+            ui.add_space(2.0);
+            // The block's own words, which is what it was written as.
+            for line in b.body.lines() {
+                ui.label(
+                    RichText::new(line)
+                        .font(FontId::new(type_scale::CAPTION, theme::mono()))
+                        .color(t.ink2),
+                );
+            }
+        });
+    ui.add_space(4.0);
+    let _ = &mut changed;
     changed
 }
 
@@ -493,6 +605,7 @@ fn guard_text(e: &Expr, vars: &[String]) -> String {
             body: vec![Stmt::Leave],
         }],
         progressions: [craps_engine::Progression::Flat; 17],
+        blocks: Vec::new(),
     };
     // `render_rule` writes `on roll when <guard>: leave`; the condition is
     // the part between.
@@ -774,6 +887,7 @@ fn stmt_text(stmt: &Stmt, vars: &[String]) -> String {
         vars: vars.to_vec(),
         rules: vec![Rule::new(Trigger::Roll, vec![stmt.clone()])],
         progressions: [craps_engine::Progression::Flat; 17],
+        blocks: Vec::new(),
     };
     craps_engine::strategy::render_rule(&s, 0)
         .split_once(": ")

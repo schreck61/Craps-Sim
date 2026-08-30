@@ -197,6 +197,29 @@ impl Rule {
 /// rule contributes its actions, and the table applies them in that order.
 /// Two rules touching the same bet are resolved by order — last write wins —
 /// which the Bench shows firing rather than leaving to be debugged.
+/// How a run of rules was written: as one `for each` block rather than as
+/// the rules it produced.
+///
+/// This is provenance, not meaning. The rules are what compiles and what
+/// runs; this only records that a person wrote them once. Whether it is
+/// *still* true is never remembered — it is asked, by re-reading `body` for
+/// each value and comparing. So a block that is unfolded and left alone
+/// stays a block, and one whose iterations are edited apart stops being one
+/// the moment they differ, with no flag that can disagree with reality.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Block {
+    /// The name each value was bound to.
+    pub name: String,
+    pub values: Vec<i64>,
+    /// The block's own source, verbatim — comments and spacing included,
+    /// because reconstructing it from the rules would normalise both away.
+    pub body: String,
+    /// Index of the first rule the block produced.
+    pub start: usize,
+    /// Rules per iteration.
+    pub len: usize,
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Strategy {
     pub name: String,
@@ -212,6 +235,9 @@ pub struct Strategy {
     /// "take everything down after two hits" and the wrong place for "press
     /// this winner out of its own winnings".
     pub progressions: [Progression; STREAMS],
+    /// Runs of rules that were written as a block. Presentation only; drop
+    /// them and the strategy plays identically.
+    pub blocks: Vec<Block>,
 }
 
 impl Strategy {
@@ -221,6 +247,7 @@ impl Strategy {
             vars: Vec::new(),
             rules,
             progressions: [Progression::Flat; STREAMS],
+            blocks: Vec::new(),
         }
     }
 

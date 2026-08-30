@@ -25,11 +25,13 @@ pub mod text;
 pub mod view;
 
 pub use action::{Action, Adjudication, Amount, BetRef, RejectReason};
-pub use ast::{AmountExpr, BinOp, Expr, Group, Read, Rule, Stmt, Strategy, Trigger, VarId};
+pub use ast::{AmountExpr, BinOp, Block, Expr, Group, Read, Rule, Stmt, Strategy, Trigger, VarId};
 pub use bench::{bench_session, BenchEvent, BenchRoll, BenchTrace};
 pub use compile::{compile, CompileError};
 pub use examples::EXAMPLES;
 pub use library::from_selection;
 pub use program::{Decision, Program, StratState};
-pub use text::{bet_name, parse, render, render_rule, ParseError, LANGUAGE_VERSION};
+pub use text::{
+    bet_name, block_holds, parse, prune_blocks, render, render_rule, ParseError, LANGUAGE_VERSION,
+};
 pub use view::{AllFeatures, FeatureMask, NoFeatures, TableView};
