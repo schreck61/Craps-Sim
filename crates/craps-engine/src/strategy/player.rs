@@ -15,7 +15,7 @@
 
 use crate::bets::{cheapest_selected_stake, BetSelection, Progression};
 use crate::game::Session;
-use crate::strategy::program::{decision_from, fired, Program};
+use crate::strategy::program::{fired, Decision, Program};
 use crate::strategy::view::{AllFeatures, Features, NoFeatures, STREAMS};
 use crate::trace::RollObserver;
 
@@ -113,8 +113,11 @@ impl Player for Compiled<'_> {
     }
 
     fn decide<O: RollObserver>(&self, s: &mut Session<'_, O, AllFeatures>) {
-        let d = decision_from(
-            s.hist.fired
+        // Named fields rather than six positional integers: `won` and `lost`
+        // are the same type, sit next to each other, and transposing them
+        // would be a silent bug in the one place that builds this.
+        let d = Decision {
+            fired: s.hist.fired
                 | if s.point.is_none() {
                     fired::COME_OUT
                 } else {
@@ -131,12 +134,12 @@ impl Player for Compiled<'_> {
                     0
                 }
                 | fired::ROLL,
-            s.hist.last_total_now,
-            s.hist.won,
-            s.hist.lost,
-            s.hist.come_established,
-            s.hist.dont_come_established,
-        );
+            total: s.hist.last_total_now,
+            won: s.hist.won,
+            lost: s.hist.lost,
+            come_established: s.hist.come_established,
+            dont_come_established: s.hist.dont_come_established,
+        };
         s.run_program(self.program, d);
     }
 

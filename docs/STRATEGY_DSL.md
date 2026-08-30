@@ -10,6 +10,14 @@ against what building them taught, with the original claim left visible above
 each correction. The gaps are enumerated in that review; what is written here
 is what the code does.
 
+Some of those gaps have since been closed by building the thing rather than by
+rewording the claim: the table's own numbers and `working(bet)` as reads
+(§3.2), the `everything` group (§3.3), `press … by` (§3.3), lists walked in
+step (§4), all six static checks (§9), and a version gate that refuses forward
+and reads back (§5.2). Those passages are additions rather than corrections,
+and they say so where the distinction matters. What remains undone is in
+Part II §8, which is the honest list.
+
 The Long Run ([GUI_DESIGN.md](GUI_DESIGN.md)) built the instrument. This
 document specifies its subject: a way to express *any* playing strategy —
 conditional, stateful, arbitrarily complex — and simulate it at the throughput
@@ -131,6 +139,16 @@ because this is what decides which strategies are expressible:
 
 *Corrected against the shipped `Read`, which this table was wrong about in
 both directions.*
+
+**`live-come` counts both halves of a come bet's life.** It was listed here
+for two revisions with no definition anywhere, and the ambiguity is real
+enough that two people building the same three-point strategy guarded against
+both readings: a come flat sitting in the box has not reached a number yet,
+and it was never said whether it counted. It does. `live-come` is the flat in
+the come box, if there is one, plus every come point established — so the
+three-point Molly's cap is `live-come < 3`, and a flat still travelling
+occupies one of those three exactly as a player waiting on it would say it
+does. `live-dont-come` counts the same way on the dark side.
 
 **It listed `working(bet)`, and for two revisions there was no such read.** A
 strategy could turn a place bet or a hardway off and back on (§3.3) and could
@@ -390,7 +408,8 @@ unconditionally. Five of the twelve strategies in the expressiveness
 experiment wanted it, and what they played instead diverged in money from what
 they were written to play. That is a modeling choice to close or to argue for,
 not a rule of craps, and it is named here so a strategy that wanted it knows
-why it was refused.
+why it was refused. It is now also carried as a named deferral in Part II §8,
+because a divergence that lives only in a matrix row reads as settled.
 
 ## 4. The Rule
 
@@ -913,10 +932,11 @@ They exist so that nobody is surprised by their own rules.
 answers the two that cannot be asked without knowing where the strategy is
 being played: **exposure**, which is measured against a budget, and
 **clipping**, which is measured against a maximum. The compiler does not know
-either — it compiles a strategy once and the same program is then run at four
-table minimums in a single sweep — so asking it would have meant either
-compiling per table or answering with a number that was true of one of them.
-Whoever holds the configuration asks the second function.
+either — it compiles a strategy once and the same program is then run at every
+table minimum the sweep covers — so asking it would have meant either
+compiling per table or answering with a number true of only one of them.
+Whoever holds the configuration asks the second function, with the minimum and
+the budget in hand.
 
 - **Never bets.** No reachable rule places a bet. The only one that refuses.
 - **Cost.** `Program::cost_bound` — instructions walked per decision in the
@@ -1346,8 +1366,8 @@ round-trip law is what keeps the two editors from becoming two languages.
 Rules reorder and delete; each carries its fire count from the last night
 stepped in Replay, which is where a dead rule announces itself. §9's checks
 join the order-ticket strip that already answers the same question of the
-bet rail — which, per §9 as corrected, is the never-bets check and the
-compiler's own refusals, not the six this document once promised.
+bet rail — all six of them, per §9 as rewritten: never-bets refuses the run,
+and the other five say their sentence beside it without stopping anything.
 
 **Principle 2, narrowed against what building it taught.** The claim was
 that anything the text expresses, the rows can render *and edit*. Rendering
@@ -1428,10 +1448,16 @@ enforced by nobody.
 - **Adjudication tests.** One test per `RejectReason`, asserting the event fires
   and the layout is unchanged.
 - **Static-check tests.** One authored strategy per §9 diagnostic, asserting the
-  exact sentence shown. §9 having been corrected to what exists, that is one
-  diagnostic — never-bets, which is tested. The compiler's other refusals, the
-  limits it enforces on slots, rules, actions and expression depth, are not each
-  pinned to their sentence, and should be.
+  exact sentence shown. §9's checks all existing now, that is what
+  [check.rs](../crates/craps-engine/src/strategy/check.rs) tests: a dead rule
+  in each of its two shapes, a conflict naming the later rule, the cost line,
+  exposure inside and outside a budget, a computed amount turning the exposure
+  into a floor, and a Martingale meeting a 4× maximum. Two of these are
+  negative and matter as much as the rest: ordinary conditions that must not
+  be called dead, and a conditional pair that must not be called a conflict —
+  a check that cries wolf teaches the author to stop reading the strip. The
+  compiler's own refusals, the limits it enforces on slots, rules, actions and
+  expression depth, are still not each pinned to their sentence, and should be.
 - **Parser fuzzing.** Malformed text never panics and always names a token.
   What runs is the truncation-and-deletion sweep described in P8 rather than a
   fuzzer: every truncation and every single-byte deletion of a valid strategy,
@@ -1442,8 +1468,11 @@ enforced by nobody.
   built: that a selected strategy becomes the live player or the run is
   refused, that editing one strikes its results stale, that the exported
   provenance names the player that played, and that the bet rail is not part of
-  a strategy's scenario. The rows themselves are untested, and the dead-rule
-  badge cannot be tested because §9's dead-rule check is not built.
+  a strategy's scenario. The rows themselves are untested. The dead-rule check
+  is now built and tested in the engine (above); what is untested is its
+  *appearance* — that the sentence reaches the order-ticket strip and takes
+  amber there — which is the same kittest gap as everything else in this
+  bullet rather than a missing check.
 
 ## 6. Dependency Budget
 
@@ -1460,14 +1489,29 @@ derived one would be a second, divergent grammar.
 | 1 | Interpreter breaks the throughput premise | Med | High | **Retired at P2a.** Measured at 1.34x–3.65x by rule count (§3); the built-in path is retained permanently rather than deleted, and the two are pinned to each other by a 10,000-seed equivalence test that now runs in CI |
 | 2 | 52 dd overruns — this is a language project inside a simulator | High | High | Cut line: P5 (the editor) drops to v0.5.1. P0–P4 ship a complete, usable feature — authored as text, debugged in the Bench — and the checkbox Design screen is untouched for everyone else |
 | 3 | S1 refactor perturbs resolution order | Med | High | Pinned outcomes + equivalence battery gate P0; no behavior change is permitted in the same commit as the refactor |
-| 4 | Users author strategies that silently do nothing | High | Med | Principle 4 end-to-end: rejection events, Bench fire counts, the never-bets static check, Run disabled with a sentence. **Partly outstanding:** the dead-rule check named here is deferred (§9), so a rule that can never fire is caught by the Bench's `0×` after a run rather than by the compiler before one |
-| 5 | Grammar churn breaks saved strategies | Med | Med | `language N` header is mandatory; unknown versions are refused, never guessed; grammar changes ship a migration or a new version, never a silent reinterpretation |
+| 4 | Users author strategies that silently do nothing | High | Med | **Retired.** Principle 4 end-to-end: rejection events carrying the verb and the stake asked for, Bench fire counts, never-bets refusing the run with a sentence — and now the dead-rule and conflict checks (§9), so an unsatisfiable condition and an overwritten rule are both named in the strip before a run rather than inferred from a `0×` after one. What the checks cannot reach is stated in §9 rather than papered over; the Bench's fire counts remain the backstop for it |
+| 5 | Grammar churn breaks saved strategies | Med | Med | `language N` header is mandatory and refuses in one direction: newer than this engine knows is refused rather than misread, older is read, because every change so far has been additive and additive changes leave old files meaning what they meant (§5.2). A breaking change bumps the number, and old files are then migrated or refused deliberately — never silently reinterpreted |
 | 6 | Explorer combinatorics eat session count | Med | Med | Curated eleven stay the default; custom rows opt-in; the sweep refuses to trade *n* below the CI the leaderboard needs and says so |
 | 7 | Sentence contract weakened by by-reference strategies | Med | Med | Hash mismatch is STALE in the existing amber register; missing strategy is an explicit state; the checkbox player's sentence is byte-identical to today's |
 | 8 | The language grows without limit under feature requests | High | Low | §12 is the contract; new vocabulary must be justified by a strategy that cannot otherwise be written, and enters through `TableView`, not through new syntax |
 
 ## 8. Deferred
 
+- **Working on the come-out.** `working <bet> off` and `on` ship; *working on
+  the come-out* does not. The come-out branch of `resolve` turns place bets
+  and hardways off unconditionally and has never had a resolution arm for
+  them, so there is nothing for the flag to switch. This is engine work with
+  its own risk to the pinned outcomes, not a grammar change, and it is the one
+  gap P2c left deliberately.
+- **Placing the number that is the point.** A real table will usually sell it
+  to you; this one refuses it unconditionally, as `NumberIsThePoint` in
+  `flat_spec` (§3.5). Five of the twelve strategies in the expressiveness
+  experiment wanted it, and what they played instead diverged in money from
+  what they were written to play — so this is a named divergence from a
+  casino rather than a rule of craps, and it belongs on this list rather than
+  in the legality matrix as though it were settled. Closing it is a resolution
+  question (a place bet on the point number and the line bet behind it both
+  resolving on the same total) before it is a language one.
 - **New bet types** (buy, lay, place-to-lose, hop, horn). One `BetKind` variant
   each plus resolution and a closed-form edge; own milestone.
 - **Record-my-play authoring** — play a session by hand in the Bench and

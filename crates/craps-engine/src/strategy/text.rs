@@ -753,61 +753,68 @@ impl Parser {
         if parse_money(self.peek()).is_some() {
             return Ok(Expr::Const(self.number()?));
         }
-        // Reads that take a bet, and reads that take a number.
-        for (word, make) in [
-            ("stake", 0usize),
-            ("up", 1),
-            ("working", 6),
-            ("wins", 2),
-            ("losses", 3),
-            ("streak", 4),
-            ("paid", 5),
-        ] {
+        // Reads that take a bet. Each word carries the read it makes and
+        // whether odds may stand in it — paired here rather than matched
+        // against a positional code twice, which is a table that breaks
+        // silently the day somebody inserts a row in the middle.
+        type MakeRead = fn(BetRef) -> Read;
+        const ON_THE_FELT: [(&str, MakeRead); 3] = [
+            ("stake", Read::Stake),
+            ("up", Read::Up),
+            ("working", Read::Working),
+        ];
+        const IN_THE_RECORD: [(&str, MakeRead); 4] = [
+            ("wins", Read::Wins),
+            ("losses", Read::Losses),
+            ("streak", Read::Streak),
+            ("paid", Read::Paid),
+        ];
+        for (word, make) in ON_THE_FELT {
             if self.peek().eq_ignore_ascii_case(word) && self.peek_at(1) == "(" {
                 self.at += 2;
-                // `stake` and `up` ask what is on the felt, which odds
-                // answer for themselves. The history reads ask what a bet
-                // has done, which odds have no record of.
-                let b = if make <= 1 || make == 6 {
-                    self.bet_ref()?
-                } else {
-                    self.recorded_bet_ref("keeps the record")?
-                };
+                // What is on the felt is a question odds answer for
+                // themselves.
+                let b = self.bet_ref()?;
                 self.expect(")")?;
-                return Ok(Expr::Read(match make {
-                    0 => Read::Stake(b),
-                    1 => Read::Up(b),
-                    2 => Read::Wins(b),
-                    3 => Read::Losses(b),
-                    4 => Read::Streak(b),
-                    6 => Read::Working(b),
-                    _ => Read::Paid(b),
-                }));
+                return Ok(Expr::Read(make(b)));
             }
         }
-        for (word, make) in [
-            ("hits", 0usize),
-            ("hits-this-shooter", 1),
-            ("come-point", 2),
-            ("dont-come-point", 3),
-        ] {
+        for (word, make) in IN_THE_RECORD {
             if self.peek().eq_ignore_ascii_case(word) && self.peek_at(1) == "(" {
                 self.at += 2;
-                // Hits are counted per dice total; come points sit on box
-                // numbers. Both index fixed-size tables, so neither may be
-                // handed a number the table has no room for.
-                let n = if make < 2 {
-                    self.dice_total()?
-                } else {
-                    self.box_number()?
-                };
+                // What a bet has done is a question odds have no record of.
+                let b = self.recorded_bet_ref("keeps the record")?;
                 self.expect(")")?;
-                return Ok(Expr::Read(match make {
-                    0 => Read::Hits(n),
-                    1 => Read::HitsThisShooter(n),
-                    2 => Read::ComePoint(n),
-                    _ => Read::DontComePoint(n),
-                }));
+                return Ok(Expr::Read(make(b)));
+            }
+        }
+        // Reads that take a number. Hits are counted per dice total; come
+        // points sit on box numbers. Both index fixed-size tables, so
+        // neither may be handed a number the table has no room for — which
+        // is why the range each one wants travels beside it.
+        type MakeNumRead = fn(u8) -> Read;
+        const BY_TOTAL: [(&str, MakeNumRead); 2] = [
+            ("hits", Read::Hits),
+            ("hits-this-shooter", Read::HitsThisShooter),
+        ];
+        const BY_BOX: [(&str, MakeNumRead); 2] = [
+            ("come-point", Read::ComePoint),
+            ("dont-come-point", Read::DontComePoint),
+        ];
+        for (word, make) in BY_TOTAL {
+            if self.peek().eq_ignore_ascii_case(word) && self.peek_at(1) == "(" {
+                self.at += 2;
+                let n = self.dice_total()?;
+                self.expect(")")?;
+                return Ok(Expr::Read(make(n)));
+            }
+        }
+        for (word, make) in BY_BOX {
+            if self.peek().eq_ignore_ascii_case(word) && self.peek_at(1) == "(" {
+                self.at += 2;
+                let n = self.box_number()?;
+                self.expect(")")?;
+                return Ok(Expr::Read(make(n)));
             }
         }
         for (word, r) in [
@@ -856,11 +863,6 @@ impl Parser {
         self.done() || STARTERS.iter().any(|w| self.peek().eq_ignore_ascii_case(w))
     }
 
-    /// An amount, or nothing — and nothing means whatever this stream's
-    /// pressing calls for, which under a flat progression is the base
-    /// stake. `bet pass` is how a player says it, and making them write
-    /// `bet pass pressed` on a table where nothing presses would be the
-    /// language describing the engine rather than the game.
     /// Where a press or a regress is heading: a stake to land on, or a step
     /// to take from wherever the bet stands.
     ///
@@ -890,6 +892,11 @@ impl Parser {
         self.amount()
     }
 
+    /// An amount, or nothing — and nothing means whatever this stream's
+    /// pressing calls for, which under a flat progression is the base
+    /// stake. `bet pass` is how a player says it, and making them write
+    /// `bet pass pressed` on a table where nothing presses would be the
+    /// language describing the engine rather than the game.
     fn amount(&mut self) -> Result<AmountExpr, ParseError> {
         if self.at_statement_boundary() {
             return Ok(AmountExpr::Pressed);
@@ -1572,8 +1579,9 @@ impl PressTarget {
                     }
                     AmountExpr::Cents(e) => e.clone(),
                     // `base`, `pressed` and `max` are answers the table
-                    // gives, not distances; a step of one of those is a step
-                    // of the bet's own base.
+                    // gives, not distances. A step of one of those is read as
+                    // a step of one table minimum, which is what "press it"
+                    // means when nobody says by how much.
                     _ => Expr::Read(Read::TableMin),
                 };
                 AmountExpr::Cents(Expr::bin(BinOp::Add, Expr::Read(Read::Stake(bet)), step))

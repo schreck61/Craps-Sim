@@ -17,17 +17,17 @@
 // not. `Op`, `Guard`, `TriggerTest` and the proposal buffer are interpreter
 // internals whose shape is load-bearing — the program identity hash is taken
 // over them — and nothing outside this crate has business naming them.
-pub mod action;
-pub mod ast;
-pub mod bench;
-pub mod check;
-pub mod compile;
-pub mod examples;
-pub mod library;
+pub(crate) mod action;
+pub(crate) mod ast;
+pub(crate) mod bench;
+pub(crate) mod check;
+pub(crate) mod compile;
+pub(crate) mod examples;
+pub(crate) mod library;
 pub(crate) mod player;
-pub mod program;
-pub mod text;
-pub mod view;
+pub(crate) mod program;
+pub(crate) mod text;
+pub(crate) mod view;
 
 pub use action::{Action, Adjudication, Amount, BetRef, RejectReason};
 pub use ast::{AmountExpr, BinOp, Block, Expr, Group, Read, Rule, Stmt, Strategy, Trigger, VarId};

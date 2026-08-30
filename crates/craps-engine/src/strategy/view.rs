@@ -87,6 +87,13 @@ pub(crate) fn stream_of(bet: BetRef) -> Option<usize> {
 pub struct FeatureMask(u8);
 
 impl FeatureMask {
+    /// The mask as its bits, for a content hash that wants structure rather
+    /// than the spelling of a `Debug` impl.
+    #[inline]
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+
     /// Reads nothing derived. What the built-in player declares, and the
     /// state in which the accumulators cost nothing.
     pub const NONE: FeatureMask = FeatureMask(0);

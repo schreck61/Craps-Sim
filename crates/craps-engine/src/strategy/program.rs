@@ -33,6 +33,15 @@ pub(crate) const MAX_ACTIONS: usize = 48;
 /// Memory slots a strategy may declare.
 pub(crate) const MAX_VARS: usize = 32;
 
+/// The instruction stream is walked once per rule per decision, so its size
+/// is cache pressure in the hot path.
+///
+/// A const assertion rather than a test: a size regression on an unusual
+/// target, or in a build nobody runs tests on, should stop the compiler
+/// rather than wait for CI. The test below stays, because it prints the
+/// number when it fails and this does not.
+const _: () = assert!(std::mem::size_of::<Op>() <= 16);
+
 /// One instruction.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Op {
@@ -156,6 +165,7 @@ pub(crate) mod fired {
 /// against. Built by the session, never by a strategy.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Decision {
+    // The won/lost sets below are `u32` bitsets over the streams.
     pub fired: u8,
     pub total: u8,
     /// One bit per stream, keyed like [`STREAMS`].
@@ -165,6 +175,8 @@ pub struct Decision {
     pub come_established: u8,
     pub dont_come_established: u8,
 }
+
+const _: () = assert!(STREAMS <= 32);
 
 /// A compiled strategy: immutable, shareable, and the same bytes on every
 /// thread.
@@ -637,29 +649,6 @@ fn read(v: &TableView<'_>, r: Read) -> i64 {
         Read::Losses(b) => v.losses(b),
         Read::Streak(b) => v.streak(b),
         Read::Paid(b) => v.paid(b),
-    }
-}
-
-/// The trigger bits and stream masks a decision carries, assembled by the
-/// session at the end of a roll.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn decision_from(
-    fired: u8,
-    total: u8,
-    won: u32,
-    lost: u32,
-    come_established: u8,
-    dont_come_established: u8,
-) -> Decision {
-    // The won/lost sets are `u32` bitsets over the streams.
-    const { assert!(STREAMS <= 32) };
-    Decision {
-        fired,
-        total,
-        won,
-        lost,
-        come_established,
-        dont_come_established,
     }
 }
 

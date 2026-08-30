@@ -483,22 +483,182 @@ fn hash_program(
     for b in name.as_bytes() {
         byte(*b, &mut h);
     }
+    let word = |v: u64, h: &mut u64| {
+        for b in v.to_le_bytes() {
+            byte(b, h);
+        }
+    };
     for op in ops {
-        // Debug formatting is stable for these plain data enums and keeps
-        // the hash honest without hand-writing a serializer per variant.
-        for b in format!("{op:?}").as_bytes() {
-            byte(*b, &mut h);
-        }
+        // Structure, not spelling.
+        //
+        // This was taken over `Debug` formatting, which is stable for plain
+        // data enums and cost nothing to write — and coupled a strategy's
+        // permanent identity to the *names* of internal variants and fields.
+        // A rename that changed nothing about what any strategy does would
+        // have re-keyed every one on every user's disk and turned every
+        // Scenario Sentence in the wild STALE against rules that had not
+        // moved. A discriminant and its payload say the same thing about
+        // meaning and nothing at all about how the code spells it.
+        let (tag, a, b) = op_shape(*op);
+        byte(tag, &mut h);
+        word(a, &mut h);
+        word(b, &mut h);
     }
-    for b in format!("{features:?}").as_bytes() {
-        byte(*b, &mut h);
-    }
+    word(features.bits() as u64, &mut h);
     for p in progressions {
-        for b in format!("{p:?}").as_bytes() {
-            byte(*b, &mut h);
-        }
+        byte(progression_tag(*p), &mut h);
     }
     h
+}
+
+/// An instruction as a discriminant and its payload, for hashing.
+///
+/// Exhaustive on purpose: a new instruction has to be given a tag here, and
+/// giving it one is the moment to notice that every saved strategy using it
+/// is a new strategy.
+fn op_shape(op: Op) -> (u8, u64, u64) {
+    let bet = |b: BetRef| -> u64 {
+        let (t, n) = match b {
+            BetRef::Pass => (0u8, 0u8),
+            BetRef::PassOdds => (1, 0),
+            BetRef::DontPass => (2, 0),
+            BetRef::DontPassLay => (3, 0),
+            BetRef::Come => (4, 0),
+            BetRef::DontCome => (5, 0),
+            BetRef::ComeOdds(n) => (6, n),
+            BetRef::DontComeLay(n) => (7, n),
+            BetRef::Place(n) => (8, n),
+            BetRef::Hardway(n) => (9, n),
+            BetRef::Field => (10, 0),
+            BetRef::AnySeven => (11, 0),
+            BetRef::AnyCraps => (12, 0),
+        };
+        (t as u64) << 8 | n as u64
+    };
+    let read = |r: Read| -> u64 {
+        let (t, n) = match r {
+            Read::Point => (0u8, 0u64),
+            Read::ComeOut => (1, 0),
+            Read::LastTotal => (2, 0),
+            Read::Roll => (3, 0),
+            Read::RollsThisShooter => (4, 0),
+            Read::Shooter => (5, 0),
+            Read::Cash => (6, 0),
+            Read::Wealth => (7, 0),
+            Read::Profit => (8, 0),
+            Read::PeakProfit => (9, 0),
+            Read::Drawdown => (10, 0),
+            Read::Handle => (11, 0),
+            Read::BuyIn => (12, 0),
+            Read::TableMin => (13, 0),
+            Read::TableMax => (14, 0),
+            Read::Stake(b) => (15, bet(b)),
+            Read::Up(b) => (16, bet(b)),
+            Read::Working(b) => (17, bet(b)),
+            Read::LiveCome => (18, 0),
+            Read::LiveDontCome => (19, 0),
+            Read::ComePoint(n) => (20, n as u64),
+            Read::DontComePoint(n) => (21, n as u64),
+            Read::OnTableFace => (22, 0),
+            Read::Hits(n) => (23, n as u64),
+            Read::HitsThisShooter(n) => (24, n as u64),
+            Read::Wins(b) => (25, bet(b)),
+            Read::Losses(b) => (26, bet(b)),
+            Read::Streak(b) => (27, bet(b)),
+            Read::Paid(b) => (28, bet(b)),
+        };
+        (t as u64) << 32 | n
+    };
+    let kind = |k: AmountKind| -> u64 {
+        match k {
+            AmountKind::Base => 0,
+            AmountKind::Pressed => 1,
+            AmountKind::Units => 2,
+            AmountKind::Cents => 3,
+            AmountKind::MaxOdds => 4,
+        }
+    };
+    let trigger = |t: TriggerTest| -> u64 {
+        let (a, b) = match t {
+            TriggerTest::Fired(bits) => (0u8, bits),
+            TriggerTest::Total(n) => (1, n),
+            TriggerTest::Win(s) => (2, s),
+            TriggerTest::Loss(s) => (3, s),
+            TriggerTest::ComeEstablished(i) => (4, i),
+            TriggerTest::DontComeEstablished(i) => (5, i),
+        };
+        (a as u64) << 8 | b as u64
+    };
+    let guard = |g: Guard| -> u64 {
+        let (a, b) = match g {
+            Guard::Always => (0u8, 0u64),
+            Guard::PointOn => (1, 0),
+            Guard::PointOnExcept(n) => (2, n as u64),
+            Guard::PointOnAndUp(b) => (3, bet(b)),
+            Guard::PointOnAndLess(r, n) => (4, read(r) ^ ((n as i64 as u64) << 48)),
+            Guard::Truthy(r) => (5, read(r)),
+            Guard::General => (6, 0),
+        };
+        (a as u64) << 56 | (b & 0x00ff_ffff_ffff_ffff)
+    };
+    match op {
+        Op::Rule {
+            trigger: t,
+            guard: g,
+            skip,
+        } => (0, trigger(t) ^ (skip as u64) << 32, guard(g)),
+        Op::GuardFalse { skip } => (1, skip as u64, 0),
+        Op::PushConst(v) => (2, v as u64, 0),
+        Op::PushVar(i) => (3, i as u64, 0),
+        Op::PushRead(r) => (4, read(r), 0),
+        Op::Bin(o) => (5, bin_tag(o) as u64, 0),
+        Op::Not => (6, 0, 0),
+        Op::Neg => (7, 0, 0),
+        Op::SetVar(i) => (8, i as u64, 0),
+        Op::Bet(b, k) => (9, bet(b), kind(k)),
+        Op::Press(b, k) => (10, bet(b), kind(k)),
+        Op::Regress(b, k) => (11, bet(b), kind(k)),
+        Op::Down(b) => (12, bet(b), 0),
+        Op::Working(b, on) => (13, bet(b), on as u64),
+        Op::Leave => (14, 0, 0),
+    }
+}
+
+const fn bin_tag(o: BinOp) -> u8 {
+    match o {
+        BinOp::Add => 0,
+        BinOp::Sub => 1,
+        BinOp::Mul => 2,
+        BinOp::Div => 3,
+        BinOp::Min => 4,
+        BinOp::Max => 5,
+        BinOp::Lt => 6,
+        BinOp::Le => 7,
+        BinOp::Gt => 8,
+        BinOp::Ge => 9,
+        BinOp::Eq => 10,
+        BinOp::Ne => 11,
+        BinOp::And => 12,
+        BinOp::Or => 13,
+    }
+}
+
+const fn progression_tag(p: crate::bets::Progression) -> u8 {
+    use crate::bets::Progression as P;
+    match p {
+        P::Flat => 0,
+        P::FullPress => 1,
+        P::HalfPress => 2,
+        P::PressAndPull => 3,
+        P::Paroli3 => 4,
+        P::S1326 => 5,
+        P::Martingale => 6,
+        P::GrandMartingale => 7,
+        P::DAlembert => 8,
+        P::ReverseDAlembert => 9,
+        P::Fibonacci => 10,
+        P::OscarsGrind => 11,
+    }
 }
 
 #[cfg(test)]
@@ -508,14 +668,11 @@ mod tests {
 
     /// A strategy's identity is pinned to a value, not just to itself.
     ///
-    /// The hash is taken over `Debug` formatting of the compiled ops, which
-    /// is stable for plain data enums but is coupled to how their variants
-    /// and fields are *spelled*. A rename that changes nothing about what a
-    /// strategy does would re-key every saved one, turning every Scenario
-    /// Sentence in the wild STALE against a strategy that had not changed —
-    /// silently, since nothing compared the hash to a known answer. This is
-    /// that comparison. If it fails after a refactor, the refactor changed
-    /// what a strategy *is*, and every saved sentence needs to know.
+    /// The hash is taken over the structure of the compiled ops — a
+    /// discriminant and its payload per instruction — so a rename cannot
+    /// move it. This is the belt to that braces: if it fails after a
+    /// refactor, the refactor changed what a strategy *is*, and every saved
+    /// Scenario Sentence in the wild needs to know.
     #[test]
     fn the_program_identity_is_pinned_to_a_value() {
         let s = parse(
@@ -526,7 +683,7 @@ mod tests {
         .unwrap_or_else(|e| panic!("{}", e.message()));
         let p = compile(&s).unwrap();
         assert_eq!(
-            p.hash, 0xdc8a_8fff_8cac_ec35,
+            p.hash, 0x3360_47d5_86d6_e507,
             "the compiled identity of a fixed strategy changed; \
              every saved sentence referring to one now reads STALE"
         );

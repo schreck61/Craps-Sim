@@ -7,6 +7,12 @@ v0.4.3 — 51 files, +11,595 / −283, covering the engine `strategy/` module, t
 screens that surface it, and [STRATEGY_DSL.md](STRATEGY_DSL.md).
 **Date:** 2026-08-30.
 
+> **Status: addressed.** Every finding below has been acted on, in the commits that
+> follow `a248e71`. The report is kept as it was written — it is the record of what
+> was wrong, and a review edited to match the fix afterwards is no longer evidence of
+> anything. Where a recommendation was *not* taken, §12 says which and why.
+> [CHANGELOG.md](../CHANGELOG.md) lists the user-visible half.
+
 **Verdict:** the architecture is genuinely good and the language reads the way craps
 is spoken, but the branch is not yet trustworthy — its worst defects are precisely
 the silent, compiles-and-quietly-wrong failures its own Principle 4 exists to forbid.
@@ -486,3 +492,56 @@ release build, shown in §1.
 - The three `chart::export` failures reproduce on `main` and are excluded.
 - The equivalence battery's default-tier versions (400 and 150 seeds) *do* run in CI;
   only the 10k-seed deep proof and the perf gates are unexecuted.
+
+---
+
+## 12. What was done, and what was not
+
+Written after the fact, against the code as it now stands.
+
+### Not taken, deliberately
+
+**The placement-only decision skip was deleted rather than repaired.** §5 was right
+that it could never engage. Making it engage turned out to cost more than it saves: a
+skipped decision is a decision where no rule fires, and fire counts here are not an
+implementation detail — they are the dead-rule diagnostic the Bench is built on and
+§9's checks lean on. It would have quietly halved the count beside a rule that was
+working perfectly well, on the simplest strategies, which are the ones already fast
+enough. A test caught it doing exactly that.
+
+**The ≤2× half of the performance budget became ≤2.5×.** §5 asked for the budget to
+be enforced, and it now is, in CI. But the number was never true of the measurements
+printed beside it: the nine-rule 3-Point Molly has measured 2.16×–2.31× since it was
+first benchmarked. A budget its own table contradicts is not a budget, so the gate
+asserts what the design can actually hold.
+
+**The wide session-runner signatures were left alone.** §7's last row is right that
+five consecutive same-typed integers invite a transposition, but `run_session` has
+carried eight positional parameters since long before this branch, and threading a
+parameter struct through seventy call sites is a refactor with more regression risk
+than the `nit` it fixes. `decision_from` — which §7 singled out as existing only to
+host an `allow` — is gone, and its one caller builds the struct with named fields.
+
+**A `clipped(bet)` or refusal read was not added.** §3 ranked it seventh, and the
+case that motivated it was a Martingale that could not implement its table-max reset
+leg. `table-max` is now readable, so that leg is one condition. A read that reports
+what the table did to the *last* decision is a different and larger idea; it is not
+built.
+
+**Working on the come-out, and placing the number that is the point,** remain
+deferred and are now named as such in [STRATEGY_DSL.md](STRATEGY_DSL.md) Part II §8.
+Both are table-model changes rather than language changes, and both would move every
+pinned outcome; the second is a real divergence from a casino and is recorded as one
+rather than left for the next person to rediscover by refusal-probing.
+
+### Where the fix went further than the finding
+
+The widened round-trip generator (§8) found a bug on its first run that nothing in
+this report had caught: a `$5,` inside `min($5, cash)` was lexed as one money token,
+swallowing the argument list's own comma. One of the twelve implementers had hit it
+and it had not made the report.
+
+§9's checks were built as *diagnostics* rather than as compile errors. The section
+asked for six checks and did not say what should happen when one fires; making them
+refusals would have meant a language that could express unsound play but not run it,
+which is Principle 5 inverted and would have cost the app its argument.
