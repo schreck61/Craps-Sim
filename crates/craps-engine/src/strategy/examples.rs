@@ -189,12 +189,52 @@ mod tests {
         for (s, wants) in cases {
             let name = s.name.clone();
             let p = compile(&s).unwrap_or_else(|e| panic!("{name}: {}", e.message()));
-            assert!(
-                p.features.has(wants) || wants == FeatureMask::NONE,
-                "{name} declared {:?}, expected to include {wants:?}",
-                p.features
-            );
+            // `has(NONE)` is false for every mask, so the old `|| wants ==
+            // NONE` rescued the two NONE cases unconditionally and this
+            // asserted nothing about them at all.
+            if wants == FeatureMask::NONE {
+                assert!(
+                    p.features.is_empty(),
+                    "{name} declared {:?}, and reads nothing that needs it",
+                    p.features
+                );
+            } else {
+                assert!(
+                    p.features.has(wants),
+                    "{name} declared {:?}, expected to include {wants:?}",
+                    p.features
+                );
+            }
         }
+    }
+
+    /// The prose says *press each on its first two hits*, which means the
+    /// bet climbs: base, then twice base, then four times.
+    ///
+    /// It did not. A progression re-prices a bet where it resolves, and the
+    /// stream still thought this one was worth its base — so every press was
+    /// torn back down by the very win it was riding, and the second press
+    /// recomputed the first one forever. The example was the counterexample
+    /// to its own caption, and this is the test that would have said so.
+    #[test]
+    fn pressing_twice_actually_climbs() {
+        let r = rules();
+        // A tripwire rule appended to the example itself: at a $5 table the
+        // 6 takes $6, so a bet that has been pressed twice stands at $24.
+        let src = format!("{PRESS_TWICE}\non roll when stake(place 6) >= $24:\n    leave\n");
+        let s = parse(&src).unwrap_or_else(|e| panic!("{}", e.message()));
+        let p = compile(&s).unwrap();
+        let tripwire = p.rule_count() - 1;
+        let climbed: u32 = (0..40u64)
+            .map(|seed| {
+                crate::strategy::bench_session(&p, &r, 500, 100_000, None, 300, 300, seed)
+                    .fire_counts[tripwire]
+            })
+            .sum();
+        assert!(
+            climbed > 0,
+            "the 6 never reached twice-pressed in forty sessions"
+        );
     }
 
     /// A stop-loss stops. Sessions end at or beyond the thresholds rather

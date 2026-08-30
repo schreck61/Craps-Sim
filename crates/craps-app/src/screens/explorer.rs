@@ -343,7 +343,12 @@ fn strip_of_combos(
         .show(ui, &t, |cx| {
             cx.set_x_domain(lo, hi);
             let strategies = explore_strategies();
-            let n_strats = strategies.len().max(1);
+            // The authored strategy takes a lane of its own beside the
+            // curated ones when it is in the field.
+            let authored = rows
+                .iter()
+                .any(|r| r.strategy_idx == craps_engine::AUTHORED_STRATEGY);
+            let n_strats = (strategies.len() + usize::from(authored)).max(1);
             let pointer = cx.response.hover_pos();
             let mut best_hover: Option<(f32, usize)> = None;
 
@@ -363,11 +368,12 @@ fn strip_of_combos(
                 );
                 // Lane by strategy family keeps 528 dots legible.
                 let lane_h = (cx.rect.height() - 30.0) / n_strats as f32;
-                let y = cx.rect.top() + 8.0 + r.strategy_idx as f32 * lane_h + lane_h / 2.0;
+                let lane = lane_of(r.strategy_idx, strategies.len());
+                let y = cx.rect.top() + 8.0 + lane as f32 * lane_h + lane_h / 2.0;
 
                 // Whisker FIRST (ribbon layer), then the dot.
                 let (ci_lo, ci_hi) = rank.interval(r);
-                let hue = family_color(&t, r.strategy_idx, n_strats);
+                let hue = family_color(&t, lane as u16, n_strats);
                 crate::chart::marks::ci_whisker(
                     cx,
                     y,
@@ -501,6 +507,21 @@ fn draw_combo_dot(
 }
 
 /// An 11-hue categorical ramp reserved to this screen, lightness-varied.
+/// Which lane a row draws in.
+///
+/// An authored strategy is not in the curated list and never will be — it
+/// arrives as a sentinel, not an index. Given to the arithmetic raw it put
+/// the dot sixty-five thousand lanes down the screen, which is a row nobody
+/// can see rather than a row that is not there. It gets the lane after the
+/// curated ones, which is where it belongs.
+fn lane_of(idx: u16, n_curated: usize) -> usize {
+    if idx == craps_engine::AUTHORED_STRATEGY {
+        n_curated
+    } else {
+        idx as usize
+    }
+}
+
 fn family_color(t: &crate::ui::theme::Theme, idx: u16, n: usize) -> Color32 {
     let k = idx as f32 / n.max(1) as f32;
     let (h, s) = (k * 330.0, 0.45 + 0.15 * ((idx % 3) as f32));
@@ -676,8 +697,15 @@ fn leaderboard(
                 }
                 // The anti-snake-oil column: identical and negative for
                 // every pressing of the same bets; never hidden.
-                let sel = &strategies[r.strategy_idx as usize].1;
-                let edge = blended_edge(sel, &rules, min_cents)
+                //
+                // An authored strategy has no closed form — its bets depend
+                // on what the dice have done — so it reports no edge rather
+                // than an invented one, which is the same answer the Duel
+                // gives. Reaching into the curated list with its sentinel
+                // index would have panicked the moment one ranked.
+                let edge = strategies
+                    .get(r.strategy_idx as usize)
+                    .and_then(|s| blended_edge(&s.1, &rules, min_cents))
                     .map(numerals::edge_pct)
                     .unwrap_or_else(|| "—".to_owned());
                 cx.text(

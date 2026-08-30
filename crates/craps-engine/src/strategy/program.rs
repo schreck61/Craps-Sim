@@ -173,6 +173,8 @@ pub struct Program {
     pub name: String,
     pub(crate) ops: Vec<Op>,
     pub(crate) vars: u16,
+    /// What each memory slot holds at session start.
+    pub(crate) var_init: Vec<i64>,
     /// Which derived history this program reads, derived from the reads it
     /// actually makes rather than declared by hand.
     pub features: FeatureMask,
@@ -255,6 +257,19 @@ impl Default for StratState {
     fn default() -> Self {
         Self {
             vars: [0; MAX_VARS],
+        }
+    }
+}
+
+impl StratState {
+    /// Seed memory from a program's declared initial values.
+    ///
+    /// Slots beyond what the program declares stay at zero, and a program
+    /// declaring more than there is room for is impossible: the compiler
+    /// refuses past [`MAX_VARS`] before this can be reached.
+    pub(crate) fn seed(&mut self, init: &[i64]) {
+        for (slot, v) in init.iter().enumerate().take(MAX_VARS) {
+            self.vars[slot] = *v;
         }
     }
 }
@@ -385,6 +400,12 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                         Direction::Down => target >= cur,
                     };
                     if wrong_way {
+                        // Refused, and said so. This was the one refusal in
+                        // the language that emitted nothing, which left a
+                        // rule visibly firing in the Bench beside a layout
+                        // that never moved and no reason given — exactly the
+                        // silence Principle 4 exists to forbid.
+                        let _ = self.reject(b, crate::strategy::RejectReason::WrongDirection);
                         continue;
                     }
                     Action::SetStake(b, a)
@@ -498,6 +519,12 @@ fn evaluate<O: RollObserver>(
                 out.push(Proposal::Stake(bet, amount_of(kind, value), dir), rule);
             }
             Op::Bet(bet, kind) => {
+                // The amount is popped first either way. Skipping the pop on
+                // the already-up path would leave its operand on the stack
+                // for the rest of the rule, and a rule with enough of them
+                // would silently start dropping later values against the
+                // depth clamp.
+                let value = if kind.takes_operand() { pop!() } else { 0 };
                 // A flat that is already working is a no-op at the table, so
                 // there is no reason to walk it all the way there. Odds are
                 // exempt: they top up toward a target that moves when a come
@@ -506,7 +533,6 @@ fn evaluate<O: RollObserver>(
                     pc += 1;
                     continue;
                 }
-                let value = if kind.takes_operand() { pop!() } else { 0 };
                 out.push(Proposal::Bet(bet, amount_of(kind, value)), rule);
             }
         }
@@ -555,13 +581,16 @@ fn apply_bin(op: BinOp, a: i64, b: i64) -> i64 {
         BinOp::Add => a.saturating_add(b),
         BinOp::Sub => a.saturating_sub(b),
         BinOp::Mul => a.saturating_mul(b),
-        // A strategy is data; dividing by zero must not take down a worker
-        // thread mid-sweep, so it yields zero.
+        // A strategy is data; no arithmetic it can write may take down a
+        // worker thread mid-sweep. Division has two ways to trap: by zero,
+        // which yields zero, and `i64::MIN / -1`, whose true answer is one
+        // past the top of the type — so it saturates there, like every other
+        // operator here.
         BinOp::Div => {
             if b == 0 {
                 0
             } else {
-                a / b
+                a.saturating_div(b)
             }
         }
         BinOp::Min => a.min(b),
@@ -658,5 +687,45 @@ mod size_tests {
             "Op is {} bytes",
             std::mem::size_of::<Op>()
         );
+    }
+
+    /// A strategy is data, and no arithmetic data can express may take a
+    /// worker thread with it.
+    ///
+    /// Division has two ways to trap and only one of them was guarded:
+    /// `i64::MIN / -1` panics in every build profile, both constants are
+    /// writable in the language, and the interpreter runs on every core with
+    /// nothing to catch it.
+    #[test]
+    fn no_arithmetic_a_strategy_can_write_will_panic() {
+        let extremes = [i64::MIN, i64::MIN + 1, -1, 0, 1, i64::MAX];
+        let ops = [
+            BinOp::Add,
+            BinOp::Sub,
+            BinOp::Mul,
+            BinOp::Div,
+            BinOp::Min,
+            BinOp::Max,
+            BinOp::Lt,
+            BinOp::Le,
+            BinOp::Gt,
+            BinOp::Ge,
+            BinOp::Eq,
+            BinOp::Ne,
+            BinOp::And,
+            BinOp::Or,
+        ];
+        for op in ops {
+            for a in extremes {
+                for b in extremes {
+                    // Saturating, wrapping or zero — the value is the
+                    // language's business. That it returns at all is this
+                    // test's business.
+                    let _ = apply_bin(op, a, b);
+                }
+            }
+        }
+        assert_eq!(apply_bin(BinOp::Div, i64::MIN, -1), i64::MAX);
+        assert_eq!(apply_bin(BinOp::Div, 7, 0), 0);
     }
 }

@@ -225,6 +225,13 @@ pub struct Strategy {
     pub name: String,
     /// Declared memory slots, by name. Index is the [`VarId`].
     pub vars: Vec<String>,
+    /// What each slot holds at session start, parallel to [`Self::vars`].
+    ///
+    /// `var trusted = 1` reads as initialization to anyone who writes it, so
+    /// it is initialization. Read defensively (a missing entry is zero) so
+    /// the two vectors drifting can never be worse than a slot starting
+    /// where it used to.
+    pub var_init: Vec<i64>,
     pub rules: Vec<Rule>,
     /// The pressing system on each bet stream, keyed like the session's
     /// streams. This is a declaration rather than a rule, and the reason is
@@ -245,6 +252,7 @@ impl Strategy {
         Self {
             name: name.into(),
             vars: Vec::new(),
+            var_init: Vec::new(),
             rules,
             progressions: [Progression::Flat; STREAMS],
             blocks: Vec::new(),

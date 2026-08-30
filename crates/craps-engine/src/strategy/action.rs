@@ -100,10 +100,19 @@ pub enum Action {
 /// nothing is the worst thing this surface could allow (Principle 4).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RejectReason {
-    /// Not legal at this moment: a line bet with a point on, a come bet on
-    /// the come-out, a place bet on the current point, odds with no flat
-    /// behind them.
+    /// Not legal at this moment, for a reason none of the sharper variants
+    /// names: odds with no flat behind them, calling off a bet that cannot
+    /// be called off.
     NotAllowedNow,
+    /// A line bet once the point is established. The pass line and the don't
+    /// pass are made on the come-out and nowhere else.
+    LineBetWithPointOn,
+    /// A come, don't come, place bet or hardway while the puck is off. These
+    /// need a point to be about.
+    NeedsPointOn,
+    /// A place bet on the number that is currently the point. The point is
+    /// covered by the line, and no table takes a place bet on it.
+    NumberIsThePoint,
     /// A contract bet: once the point is on it cannot come down, and no
     /// table will take it back because the player changed their mind.
     ContractBet,
@@ -111,6 +120,15 @@ pub enum RejectReason {
     NothingThere,
     /// The odds policy allows nothing behind this point.
     NoOddsAllowed,
+    /// A named stake the table would not take: below the minimum for this
+    /// bet. Refused rather than quietly rounded up into one it would take,
+    /// because a strategy that asked for $0.12 and got $6 is not the
+    /// strategy anyone wrote.
+    BelowTableMinimum,
+    /// A `press` whose target sits at or below the current stake, or a
+    /// `regress` whose target sits at or above it. The rule fired and asked
+    /// for something that is not what the verb means.
+    WrongDirection,
     /// Neither the requested stake nor the base fallback fit the bankroll.
     InsufficientBankroll,
 }
@@ -121,9 +139,14 @@ impl RejectReason {
     pub fn label(&self) -> &'static str {
         match self {
             RejectReason::NotAllowedNow => "not allowed right now",
+            RejectReason::LineBetWithPointOn => "the point is already established",
+            RejectReason::NeedsPointOn => "there's no point yet",
+            RejectReason::NumberIsThePoint => "that number is the point",
             RejectReason::ContractBet => "a contract bet can't come down",
             RejectReason::NothingThere => "there's nothing on that bet",
             RejectReason::NoOddsAllowed => "odds policy allows none",
+            RejectReason::BelowTableMinimum => "below the table minimum for that bet",
+            RejectReason::WrongDirection => "a press can't lower, a regress can't raise",
             RejectReason::InsufficientBankroll => "bankroll won't cover it",
         }
     }
@@ -164,7 +187,7 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
     #[inline]
     pub(crate) fn apply(&mut self, action: Action) -> Adjudication {
         match action {
-            Action::Bet(bet, amount) => self.apply_bet(bet, amount),
+            Action::Bet(bet, amount) => self.apply_rule_bet(bet, amount),
             Action::SetStake(bet, amount) => self.apply_set_stake(bet, amount),
             Action::Down(bet) => self.apply_down(bet),
             Action::Working(bet, on) => self.apply_working(bet, on),
@@ -183,8 +206,9 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
             // Odds already top up toward a target, which is the same thing.
             return self.apply_bet(bet, amount);
         }
-        let Some(spec) = self.flat_spec(bet) else {
-            return self.reject(bet, RejectReason::NotAllowedNow);
+        let spec = match self.flat_spec(bet) {
+            Ok(s) => s,
+            Err(r) => return self.reject(bet, r),
         };
         let cur = *self.slot(spec.slot);
         if cur == 0 {
@@ -192,11 +216,27 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
         }
         let want = match amount {
             Amount::Pressed => self.pressed_stake(bet, spec.base),
-            other => self.resolve_amount(bet, other, spec.base)?,
+            other => match self.resolve_amount(bet, other, spec.base) {
+                Ok(v) => v,
+                Err(r) => return self.reject(bet, r),
+            },
         };
         // A stake below the table's own minimum for this bet is not a stake;
         // a player who wants nothing there takes it down.
         let want = want.max(spec.base);
+        // `pressed` is the stream's own answer, so it neither needs holding
+        // to the table again nor has anything to tell the stream. Every other
+        // amount is the rule naming a figure, and the stream is told: without
+        // that, the progression re-prices the bet at the next resolution and
+        // the press is undone by the very win it was riding — which is why no
+        // ladder could ever climb.
+        let want = if matches!(amount, Amount::Pressed) {
+            want
+        } else {
+            let want = self.clip_to_table_max(bet, want, spec.base);
+            self.set_stream_stake(bet, want);
+            want
+        };
         if want > cur {
             match self.try_stake(want - cur) {
                 Some(a) => {
@@ -228,8 +268,9 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
         if matches!(bet, BetRef::Pass | BetRef::Come) && self.point.is_some() {
             return self.reject(bet, RejectReason::ContractBet);
         }
-        let Some(spec) = self.flat_spec(bet) else {
-            return self.reject(bet, RejectReason::NotAllowedNow);
+        let spec = match self.flat_spec(bet) {
+            Ok(s) => s,
+            Err(r) => return self.reject(bet, r),
         };
         let cur = *self.slot(spec.slot);
         if cur == 0 {
@@ -319,6 +360,25 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
     /// adjudication either way.
     #[inline]
     pub(crate) fn apply_bet(&mut self, bet: BetRef, amount: Amount) -> Adjudication {
+        self.place_bet(bet, amount, false)
+    }
+
+    /// The same placement, asked for by a *rule* rather than by the built-in
+    /// player.
+    ///
+    /// The difference is `shape`: a rule names a figure out of the language
+    /// and the table has to hold it to the minimum, the maximum, and the
+    /// stream it belongs to. The built-in player arrives with a stake its
+    /// progression has already shaped, and re-shaping it here would round a
+    /// second time and drift the two players apart — which the equivalence
+    /// battery exists to catch.
+    #[inline]
+    pub(crate) fn apply_rule_bet(&mut self, bet: BetRef, amount: Amount) -> Adjudication {
+        self.place_bet(bet, amount, true)
+    }
+
+    #[inline]
+    fn place_bet(&mut self, bet: BetRef, amount: Amount, shape: bool) -> Adjudication {
         if is_odds(bet) {
             return if self.odds_flat_is_up(bet) {
                 self.apply_odds(bet, amount)
@@ -326,15 +386,35 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                 self.reject(bet, RejectReason::NotAllowedNow)
             };
         }
-        let Some(spec) = self.flat_spec(bet) else {
-            return self.reject(bet, RejectReason::NotAllowedNow);
+        let spec = match self.flat_spec(bet) {
+            Ok(s) => s,
+            Err(r) => return self.reject(bet, r),
         };
         if *self.slot(spec.slot) != 0 {
             return Ok(0); // already up; `Bet` is idempotent
         }
         let want = match amount {
             Amount::Pressed => self.pressed_stake(bet, spec.base),
-            other => self.resolve_amount(bet, other, spec.base)?,
+            other => match self.resolve_amount(bet, other, spec.base) {
+                Ok(v) => v,
+                Err(r) => return self.reject(bet, r),
+            },
+        };
+        // Only a figure the rule named itself is shaped here. `base` and
+        // `pressed` arrive already held to the table by the progression
+        // machinery that produced them, and shaping them a second time would
+        // round twice and drift the compiled player away from the built-in
+        // one — which is what the equivalence battery is watching for.
+        let named = matches!(amount, Amount::Cents(_) | Amount::Units(_));
+        let want = if shape && named {
+            let want = self.clip_to_table_max(bet, want, spec.base);
+            // A rule that names its own figure has said what this bet is
+            // worth from now on; the stream is told, so the progression does
+            // not re-price it back at the next resolution.
+            self.set_stream_stake(bet, want);
+            want
+        } else {
+            want
         };
         match self.try_stake_or_base(want, spec.base) {
             Some(a) => {
@@ -346,34 +426,53 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
         }
     }
 
-    /// Resolve a flat bet to its slot and base stake, or `None` when the
-    /// game state does not permit it right now. These are table rules; a
+    /// Resolve a flat bet to its slot and base stake, or say why the game
+    /// state does not permit it right now. These are table rules; a
     /// strategy's own conditions (how many come bets it wants, which numbers
     /// it places) are not expressed here.
+    ///
+    /// The refusal is named rather than lumped under one reason, because
+    /// "not allowed right now" is three different rules of craps wearing one
+    /// label, and an author reading it back has no way to tell which one
+    /// they broke.
     #[inline]
-    fn flat_spec(&self, bet: BetRef) -> Option<FlatSpec> {
+    fn flat_spec(&self, bet: BetRef) -> Result<FlatSpec, RejectReason> {
+        // Deliberately not routed through `flat_spec_any`: this is the hot
+        // placement path, and the extra call cost it measurably. The two
+        // matches over the same enum are both exhaustive, so the compiler
+        // keeps them honest with each other.
         let (slot, base) = match bet {
             BetRef::Pass => (Slot::Pass, self.min),
             BetRef::DontPass => (Slot::DontPass, self.min),
             BetRef::Come => (Slot::Come, self.min),
             BetRef::DontCome => (Slot::DontCome, self.min),
             BetRef::Field => (Slot::Field, self.min),
-            BetRef::Place(n) => (Slot::Place(place_index(n)?), place_stake(self.min, n)),
-            BetRef::Hardway(n) => (Slot::Hardway(hard_index(n)?), self.rules.prop_bet_cents),
+            BetRef::Place(n) => (
+                Slot::Place(place_index(n).ok_or(RejectReason::NotAllowedNow)?),
+                place_stake(self.min, n),
+            ),
+            BetRef::Hardway(n) => (
+                Slot::Hardway(hard_index(n).ok_or(RejectReason::NotAllowedNow)?),
+                self.rules.prop_bet_cents,
+            ),
             BetRef::AnySeven => (Slot::AnySeven, self.rules.prop_bet_cents),
             BetRef::AnyCraps => (Slot::AnyCraps, self.rules.prop_bet_cents),
-            _ => return None,
+            _ => return Err(RejectReason::NotAllowedNow),
         };
-        let allowed = match bet {
-            BetRef::Pass | BetRef::DontPass => self.point.is_none(),
-            BetRef::Come | BetRef::DontCome | BetRef::Hardway(_) => self.point.is_some(),
+        let spec = FlatSpec { slot, base };
+        match bet {
+            BetRef::Pass | BetRef::DontPass if self.point.is_some() => {
+                Err(RejectReason::LineBetWithPointOn)
+            }
+            BetRef::Come | BetRef::DontCome | BetRef::Hardway(_) if self.point.is_none() => {
+                Err(RejectReason::NeedsPointOn)
+            }
             // The point number is never placed, and place bets are made only
             // while a point is on.
-            BetRef::Place(n) => self.point.is_some_and(|p| p != n),
-            // One-roll bets work on every roll.
-            _ => true,
-        };
-        allowed.then_some(FlatSpec { slot, base })
+            BetRef::Place(_) if self.point.is_none() => Err(RejectReason::NeedsPointOn),
+            BetRef::Place(n) if self.point == Some(n) => Err(RejectReason::NumberIsThePoint),
+            _ => Ok(spec),
+        }
     }
 
     #[inline]
@@ -571,10 +670,17 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
     /// What this bet's progression stream currently calls for. Place bets
     /// round to their payout unit; everything else rounds to whole dollars,
     /// because a real table does not take a $33.75 flat.
+    /// Box numbers that are not box numbers cannot reach here from the
+    /// grammar — the parser and the compiler both refuse them — but a
+    /// strategy is data, and data that took an unexpected shape must not
+    /// panic a worker thread mid-sweep. An unknown number falls back to the
+    /// base stake rather than asserting its own impossibility.
     fn pressed_stake(&mut self, bet: BetRef, base: i64) -> i64 {
         if let BetRef::Place(n) = bet {
-            let i = place_index(n).expect("place number");
-            return self.prog_place_stake(i);
+            return match place_index(n) {
+                Some(i) => self.prog_place_stake(i),
+                None => base,
+            };
         }
         let want = match bet {
             BetRef::Pass => self.p_pass.stake,
@@ -582,7 +688,10 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
             BetRef::Come => self.p_come.stake,
             BetRef::DontCome => self.p_dc.stake,
             BetRef::Field => self.p_field.stake,
-            BetRef::Hardway(n) => self.p_hard[hard_index(n).expect("hardway number")].stake,
+            BetRef::Hardway(n) => match hard_index(n) {
+                Some(i) => self.p_hard[i].stake,
+                None => return base,
+            },
             BetRef::AnySeven => self.p_any7.stake,
             BetRef::AnyCraps => self.p_anycraps.stake,
             _ => base,
@@ -601,20 +710,77 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
             Amount::Base => return Ok(base),
             // Handled before this point, where `&mut self` is available.
             Amount::Pressed => return Ok(base),
+            // A named figure below what this table takes for this bet is
+            // refused, not quietly rounded up into one it would take. The
+            // author asked for a stake the table does not sell.
+            Amount::Cents(c) if c < base => return Err(RejectReason::BelowTableMinimum),
             Amount::Cents(c) => c,
+            // Units are table minimums by definition, so rounding a short
+            // one up to the bet's own base is the documented meaning rather
+            // than a silent correction — but asking for none of them is not
+            // a bet.
+            Amount::Units(n) if n <= 0 => return Err(RejectReason::BelowTableMinimum),
             Amount::Units(n) => n.saturating_mul(self.min),
             // Only reachable when a strategy asks for max odds on a bet that
             // takes none; the caller has already handled the odds bets.
             Amount::MaxOdds => return Err(RejectReason::NoOddsAllowed),
         };
-        Ok(match bet {
+        let shaped = match bet {
             BetRef::Place(n) => round_up(raw, place_unit_of(n)),
             _ => raw,
-        })
+        };
+        Ok(shaped.max(base))
+    }
+
+    /// Hold an explicit stake to the table maximum, telling the observer when
+    /// it bites. Principle 4: the truncation that stops a Martingale is an
+    /// event, not a flat spot in a curve.
+    #[inline]
+    fn clip_to_table_max(&mut self, bet: BetRef, want: i64, base: i64) -> i64 {
+        let max = self.table_max.max(base);
+        if want > max {
+            self.emit(bet_kind(bet), BetEventKind::ClippedToMax, max);
+            return max;
+        }
+        want
+    }
+
+    /// Tell this bet's progression stream what the bet is worth now.
+    ///
+    /// A rule acting at the decision point and a progression acting at
+    /// resolution are two hands on the same bet. Without this the
+    /// progression wins every argument: it re-prices the bet from its own
+    /// stake on the next win, so a press that raised the felt is torn back
+    /// down by the very hit it was riding, and no ladder can ever climb.
+    /// Odds have no stream of their own — they top up toward a target the
+    /// flat decides — so they are left alone.
+    fn set_stream_stake(&mut self, bet: BetRef, stake: i64) {
+        let st = match bet {
+            BetRef::Pass => &mut self.p_pass,
+            BetRef::DontPass => &mut self.p_dont,
+            BetRef::Come => &mut self.p_come,
+            BetRef::DontCome => &mut self.p_dc,
+            BetRef::Field => &mut self.p_field,
+            BetRef::AnySeven => &mut self.p_any7,
+            BetRef::AnyCraps => &mut self.p_anycraps,
+            BetRef::Place(n) => match place_index(n) {
+                Some(i) => &mut self.p_place[i],
+                None => return,
+            },
+            BetRef::Hardway(n) => match hard_index(n) {
+                Some(i) => &mut self.p_hard[i],
+                None => return,
+            },
+            BetRef::PassOdds
+            | BetRef::DontPassLay
+            | BetRef::ComeOdds(_)
+            | BetRef::DontComeLay(_) => return,
+        };
+        st.stake = stake;
     }
 
     #[inline]
-    fn reject(&mut self, bet: BetRef, reason: RejectReason) -> Adjudication {
+    pub(crate) fn reject(&mut self, bet: BetRef, reason: RejectReason) -> Adjudication {
         self.emit(bet_kind(bet), BetEventKind::Rejected { reason }, 0);
         Err(reason)
     }
@@ -718,13 +884,16 @@ mod tests {
         let (sel, r) = (BetSelection::default(), rules(OddsPolicy::None));
         let mut t = table(&sel, &r, 100_000);
         t.point = Some(6);
+        // The refusal names the rule of craps it broke, not a shrug: an
+        // author reading "not allowed right now" off three different
+        // prohibitions has no way to tell which one they hit.
         assert_eq!(
             t.apply(Action::Bet(BetRef::Pass, Amount::Units(1))),
-            Err(RejectReason::NotAllowedNow)
+            Err(RejectReason::LineBetWithPointOn)
         );
         assert_eq!(t.pass, 0);
         assert_eq!(t.cash, 100_000, "a refused bet costs nothing");
-        assert_eq!(refusals(&t), vec![RejectReason::NotAllowedNow]);
+        assert_eq!(refusals(&t), vec![RejectReason::LineBetWithPointOn]);
     }
 
     #[test]
@@ -733,7 +902,7 @@ mod tests {
         let mut t = table(&sel, &r, 100_000);
         assert_eq!(
             t.apply(Action::Bet(BetRef::Come, Amount::Units(1))),
-            Err(RejectReason::NotAllowedNow)
+            Err(RejectReason::NeedsPointOn)
         );
     }
 
@@ -744,7 +913,7 @@ mod tests {
         t.point = Some(6);
         assert_eq!(
             t.apply(Action::Bet(BetRef::Place(6), Amount::Units(1))),
-            Err(RejectReason::NotAllowedNow)
+            Err(RejectReason::NumberIsThePoint)
         );
         // Any other box number is fine.
         assert!(t
@@ -815,8 +984,8 @@ mod tests {
         t.point = Some(4);
         // 6 and 8 pay 7:6, so they take $6 units; everything else takes $5.
         assert_eq!(
-            t.apply(Action::Bet(BetRef::Place(6), Amount::Cents(1000))),
-            Ok(1200)
+            t.apply(Action::Bet(BetRef::Place(6), Amount::Cents(1300))),
+            Ok(1800)
         );
         assert_eq!(
             t.apply(Action::Bet(BetRef::Place(5), Amount::Cents(1000))),
@@ -826,6 +995,54 @@ mod tests {
             t.apply(Action::Bet(BetRef::Place(9), Amount::Cents(1100))),
             Ok(1500)
         );
+    }
+
+    #[test]
+    fn a_stake_the_table_would_not_take_is_refused_not_rounded_up() {
+        let (sel, r) = (BetSelection::default(), rules(OddsPolicy::None));
+        let mut t = table(&sel, &r, 100_000);
+        // The trap this closes: a bare number in the language is cents, so
+        // somebody writing `bet place 6 12` means twelve dollars and used to
+        // get a six-dollar bet — quietly, and off by fifty times. Asking for
+        // less than the table takes is now a refusal with a reason.
+        assert_eq!(
+            t.apply(Action::Bet(BetRef::Pass, Amount::Cents(12))),
+            Err(RejectReason::BelowTableMinimum)
+        );
+        assert_eq!(t.pass, 0, "and nothing went up");
+        t.point = Some(4);
+        assert_eq!(
+            t.apply(Action::Bet(BetRef::Place(6), Amount::Cents(12))),
+            Err(RejectReason::BelowTableMinimum)
+        );
+        assert_eq!(t.place[2], 0, "and nothing went up");
+        // Units are table minimums by definition, so a short one rounds up to
+        // the bet's own base — that is what the word means, not a silent
+        // correction of a figure somebody wrote.
+        assert_eq!(
+            t.apply(Action::Bet(BetRef::Place(6), Amount::Units(1))),
+            Ok(1200)
+        );
+    }
+
+    #[test]
+    fn an_explicit_stake_is_held_to_the_table_maximum() {
+        let (sel, r) = (BetSelection::default(), rules(OddsPolicy::None));
+        let mut t = table(&sel, &r, 10_000_000);
+        t.point = Some(4);
+        let max = t.table_max;
+        // Clipped, and said so: this is how a real table stops a Martingale,
+        // and the spec makes seeing the truncation the whole point.
+        t.point = None;
+        assert_eq!(
+            t.apply(Action::Bet(BetRef::Pass, Amount::Cents(max * 10))),
+            Ok(max)
+        );
+        assert!(t
+            .obs
+            .events
+            .iter()
+            .any(|e| matches!(e.kind, BetEventKind::ClippedToMax)));
     }
 
     #[test]
@@ -933,10 +1150,13 @@ mod tests {
         assert_eq!(t.place[2], 1200);
         assert_eq!(t.cash, start);
 
-        // Never below the table's own stake for the bet: a player who wants
-        // nothing there takes it down.
-        t.apply(Action::SetStake(BetRef::Place(6), Amount::Cents(1)))
-            .unwrap();
+        // A figure the table would not take is refused rather than quietly
+        // rounded into one it would: a player who wants nothing there takes
+        // it down, and the layout does not move meanwhile.
+        assert_eq!(
+            t.apply(Action::SetStake(BetRef::Place(6), Amount::Cents(1))),
+            Err(RejectReason::BelowTableMinimum)
+        );
         assert_eq!(t.place[2], 1200);
     }
 

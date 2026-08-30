@@ -39,6 +39,14 @@ pub enum Resolution {
     Changed { got: u32 },
     /// This machine has no strategy by that name.
     Missing,
+    /// The strategy is here, but the editor is holding work that is not on
+    /// disk. Opening over it would destroy it, so the author decides.
+    Unsaved,
+}
+
+/// What a library entry holds, or nothing if it cannot be read right now.
+fn entry_source(entry: &crate::store_strategies::SavedStrategy) -> String {
+    crate::store_strategies::load(&entry.path).unwrap_or_default()
 }
 
 #[derive(Default)]
@@ -138,9 +146,29 @@ impl BenchState {
     /// rather than fall back to the bet rail.
     pub fn resolve(&mut self, want: &crate::config::StrategyRef) -> Resolution {
         self.refresh_library();
-        let Some(entry) = self.library.iter().find(|e| e.name == want.name).cloned() else {
+        // The reference carries the name the strategy declares; the library
+        // is keyed by file stems, which the store sanitizes. Matching the two
+        // raw meant "44 Inside, regressed" saved itself under a stem its own
+        // sentence could never find again — the spec's own flagship example,
+        // permanently Missing on the machine that wrote it.
+        let sanitized = crate::store_strategies::sanitize(&want.name);
+        let Some(entry) = self
+            .library
+            .iter()
+            .find(|e| e.name == want.name || e.name == sanitized)
+            .cloned()
+        else {
             return Resolution::Missing;
         };
+        // Opening over unsaved work is how an author loses it. `dirty()`
+        // exists for exactly this and was not being asked.
+        if self.dirty() && self.source != entry_source(&entry) {
+            self.library_note = Some(format!(
+                "\"{}\" is in the library, but this editor has unsaved changes — save or clear them first.",
+                entry.name
+            ));
+            return Resolution::Unsaved;
+        }
         self.load_from(&entry);
         match &self.program {
             None => Resolution::Missing,

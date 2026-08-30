@@ -39,6 +39,10 @@ pub(crate) trait Player {
     fn progressions(&self, sel: &BetSelection) -> [Progression; STREAMS] {
         [sel.progression; STREAMS]
     }
+
+    /// Put the session's strategy memory where this player wants to start.
+    /// The checkbox player has no memory and wants nothing.
+    fn init_state(&self, _st: &mut crate::strategy::StratState) {}
 }
 
 /// The checkbox player: a [`BetSelection`](crate::BetSelection) and one
@@ -98,11 +102,25 @@ impl Player for Compiled<'_> {
         }
     }
 
+    fn init_state(&self, st: &mut crate::strategy::StratState) {
+        st.seed(&self.program.var_init);
+    }
+
     fn decide<O: RollObserver>(&self, s: &mut Session<'_, O, AllFeatures>) {
         let d = decision_from(
             s.hist.fired
                 | if s.point.is_none() {
                     fired::COME_OUT
+                } else {
+                    0
+                }
+                // The first decision of a session happens before any roll,
+                // and is the one moment a player is standing at the table
+                // with nothing having happened yet. `on session-start` was
+                // spelled, compiled, and offered in the editor without this
+                // line, so every rule written on it fired never.
+                | if s.hist.roll == 0 {
+                    fired::SESSION_START
                 } else {
                     0
                 }

@@ -599,6 +599,7 @@ fn guard_text(e: &Expr, vars: &[String]) -> String {
     let s = Strategy {
         name: String::new(),
         vars: vars.to_vec(),
+        var_init: vec![0; vars.len()],
         rules: vec![Rule {
             trigger: Trigger::Roll,
             guard: Some(e.clone()),
@@ -885,6 +886,7 @@ fn stmt_text(stmt: &Stmt, vars: &[String]) -> String {
     let s = Strategy {
         name: String::new(),
         vars: vars.to_vec(),
+        var_init: vec![0; vars.len()],
         rules: vec![Rule::new(Trigger::Roll, vec![stmt.clone()])],
         progressions: [craps_engine::Progression::Flat; 17],
         blocks: Vec::new(),

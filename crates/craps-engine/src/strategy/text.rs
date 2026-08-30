@@ -43,16 +43,25 @@ pub struct ParseError {
 
 impl ParseError {
     pub fn message(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.token.is_empty() {
-            format!("line {}: {}", self.line, self.what)
+            write!(f, "line {}: {}", self.line, self.what)
         } else {
-            format!(
+            write!(
+                f,
                 "line {}: {} — found \"{}\"",
                 self.line, self.what, self.token
             )
         }
     }
 }
+
+impl std::error::Error for ParseError {}
 
 // ---------------------------------------------------------------- tokenizer
 
@@ -152,9 +161,20 @@ fn tokenize(src: &str) -> Vec<Token> {
                 }
                 // Thousands separators belong to money and nowhere else: a
                 // bare `9267,` inside `max(9267, x)` is a number and a comma.
-                while i < cs.len()
-                    && (cs[i].is_ascii_digit() || cs[i] == '.' || (money && cs[i] == ','))
-                {
+                //
+                // And even in money a comma is only a separator when it
+                // actually separates thousands — three digits with no fourth
+                // behind them. Taking every comma made `min($5, x)` read as
+                // the single token `$5,` and swallow the argument list's own
+                // punctuation, which is a sentence a person would write.
+                let thousands = |i: usize| {
+                    money
+                        && cs[i] == ','
+                        && cs.len() > i + 3
+                        && cs[i + 1..i + 4].iter().all(char::is_ascii_digit)
+                        && !cs.get(i + 4).is_some_and(char::is_ascii_digit)
+                };
+                while i < cs.len() && (cs[i].is_ascii_digit() || cs[i] == '.' || thousands(i)) {
                     i += 1;
                 }
                 // `1-3-2-6` is the name of a progression, not three
@@ -215,7 +235,27 @@ struct Parser {
     /// tree exactly what it would have been written by hand, which is what
     /// lets the round-trip law stay a law.
     bindings: Vec<(String, i64)>,
+    /// How deep the expression walk currently is.
+    ///
+    /// Descent costs a native stack frame per level, and strategy text
+    /// arrives by paste and by hand-edited file — so a thousand open
+    /// parentheses would take the process down before any of the compiler's
+    /// bounds could refuse them. This counter is what makes the parser
+    /// itself total.
+    expr_depth: usize,
 }
+
+/// How deeply an expression may nest before the parser refuses it.
+///
+/// Generous on purpose: parentheses cost nesting without costing operand
+/// depth, so this sits well above the compiler's [`STACK_DEPTH`] and still
+/// far below anything that could exhaust a stack.
+///
+/// [`STACK_DEPTH`]: crate::strategy::program
+const MAX_EXPR_DEPTH: usize = 64;
+
+/// How deeply `for each` blocks may nest.
+const MAX_BLOCK_DEPTH: usize = 8;
 
 impl Parser {
     fn peek(&self) -> &str {
@@ -281,6 +321,51 @@ impl Parser {
         self.err("expected a number")
     }
 
+    /// A number in a hole the grammar constrains — a box number, a dice
+    /// total.
+    ///
+    /// Two things this does that a bare `as u8` did not. It refuses a value
+    /// that does not fit rather than wrapping it into one that does, so
+    /// `place 260` is an error instead of a place 4 nobody asked for. And it
+    /// names the number in the message, because the offending token is the
+    /// one the author typed, not whatever word happened to follow it.
+    fn checked_number(&mut self, ok: impl Fn(u8) -> bool, what: &str) -> Result<u8, ParseError> {
+        let line = self.line();
+        let token = self.peek().to_owned();
+        let v = self.number()?;
+        match u8::try_from(v) {
+            Ok(n) if ok(n) => Ok(n),
+            _ => Err(ParseError {
+                line,
+                token,
+                what: what.to_owned(),
+            }),
+        }
+    }
+
+    /// A box number: the six a place bet, a come point, or odds can sit on.
+    fn box_number(&mut self) -> Result<u8, ParseError> {
+        self.checked_number(
+            |n| crate::place_index(n).is_some(),
+            "not a box number (4, 5, 6, 8, 9 or 10)",
+        )
+    }
+
+    /// A dice total, which is what the two dice can add up to.
+    fn dice_total(&mut self) -> Result<u8, ParseError> {
+        self.checked_number(|n| (2..=12).contains(&n), "not a dice total (2 through 12)")
+    }
+
+    /// Guard one level of expression descent.
+    fn descend(&mut self) -> Result<(), ParseError> {
+        self.expr_depth += 1;
+        if self.expr_depth > MAX_EXPR_DEPTH {
+            self.expr_depth -= 1;
+            return self.err("this expression nests too deeply to read");
+        }
+        Ok(())
+    }
+
     /// The innermost binding of this name, if any.
     fn binding(&self, name: &str) -> Option<i64> {
         self.bindings
@@ -322,13 +407,88 @@ const PROGRESSION_WORDS: [(Progression, &str); 12] = [
     (Progression::OscarsGrind, "oscars-grind"),
 ];
 
+/// Exhaustive on purpose: a fallback here would render a progression this
+/// table has not learned to spell as `flat`, and the strategy would come
+/// back off disk playing a different system than the one saved.
 fn progression_word(p: Progression) -> &'static str {
-    PROGRESSION_WORDS
-        .iter()
-        .find(|(q, _)| *q == p)
-        .map(|(_, w)| *w)
-        .unwrap_or("flat")
+    match p {
+        Progression::Flat => "flat",
+        Progression::FullPress => "full-press",
+        Progression::HalfPress => "half-press",
+        Progression::PressAndPull => "press-and-pull",
+        Progression::Paroli3 => "paroli-3",
+        Progression::S1326 => "1-3-2-6",
+        Progression::Martingale => "martingale",
+        Progression::GrandMartingale => "grand-martingale",
+        Progression::DAlembert => "dalembert",
+        Progression::ReverseDAlembert => "reverse-dalembert",
+        Progression::Fibonacci => "fibonacci",
+        Progression::OscarsGrind => "oscars-grind",
+    }
 }
+
+/// Words the grammar already owns.
+///
+/// A memory slot may not take one. `set roll = 1` would write the slot while
+/// every *read* of `roll` returned the table's own value, so the name would
+/// mean two different things in one strategy and neither would be wrong
+/// anywhere the author could see it.
+/// Whether this reference names one of the four odds bets.
+///
+/// They are real in `bet odds on pass`, where the table tops them up toward
+/// a target, and nowhere else: they keep no win/loss record of their own and
+/// no pressing system of their own, because both belong to the flat they
+/// sit behind.
+const fn is_odds_ref(bet: BetRef) -> bool {
+    matches!(
+        bet,
+        BetRef::PassOdds | BetRef::DontPassLay | BetRef::ComeOdds(_) | BetRef::DontComeLay(_)
+    )
+}
+
+/// Only the words that are read *bare*. `hits`, `streak`, `paid` and the
+/// rest of the parameterized reads are recognized only when a `(` follows,
+/// so `var hits` is a perfectly good memory slot and always was — reserving
+/// those would take names people actually want, for no reason at all.
+const RESERVED_WORDS: [&str; 34] = [
+    // reads spelled as a bare word
+    "point",
+    "come-out",
+    "last-total",
+    "roll",
+    "rolls-this-shooter",
+    "shooter",
+    "cash",
+    "wealth",
+    "profit",
+    "peak-profit",
+    "drawdown",
+    "handle",
+    "live-come",
+    "live-dont-come",
+    "on-table-face",
+    // operators and amounts
+    "min",
+    "max",
+    "not",
+    "and",
+    "or",
+    "base",
+    "pressed",
+    "units",
+    "cents",
+    // structure
+    "strategy",
+    "language",
+    "var",
+    "on",
+    "for",
+    "when",
+    "each",
+    "as",
+    "to",
+    "of",
+];
 
 impl Parser {
     /// `pass`, `dont pass`, `place 6`, `odds on come 6`, …
@@ -365,18 +525,18 @@ impl Parser {
             return self.err("expected \"seven\" or \"craps\" after \"any\"");
         }
         if self.eat("place") {
-            let n = self.number()? as u8;
-            return match crate::place_index(n) {
-                Some(_) => Ok(BetRef::Place(n)),
-                None => self.err("not a place number (4, 5, 6, 8, 9 or 10)"),
-            };
+            let n = self.checked_number(
+                |n| crate::place_index(n).is_some(),
+                "not a place number (4, 5, 6, 8, 9 or 10)",
+            )?;
+            return Ok(BetRef::Place(n));
         }
         if self.eat("hard") {
-            let n = self.number()? as u8;
-            return match crate::hard_index(n) {
-                Some(_) => Ok(BetRef::Hardway(n)),
-                None => self.err("not a hardway number (4, 6, 8 or 10)"),
-            };
+            let n = self.checked_number(
+                |n| crate::hard_index(n).is_some(),
+                "not a hardway number (4, 6, 8 or 10)",
+            )?;
+            return Ok(BetRef::Hardway(n));
         }
         self.err("expected a bet")
     }
@@ -390,12 +550,10 @@ impl Parser {
                 return Ok(BetRef::DontPassLay);
             }
             self.expect("come")?;
-            let n = self.number()? as u8;
-            return Ok(BetRef::DontComeLay(n));
+            return Ok(BetRef::DontComeLay(self.box_number()?));
         }
         if self.eat("come") {
-            let n = self.number()? as u8;
-            return Ok(BetRef::ComeOdds(n));
+            return Ok(BetRef::ComeOdds(self.box_number()?));
         }
         self.err("expected the bet the odds sit behind")
     }
@@ -415,7 +573,7 @@ impl Parser {
         }
         if self.eat("total") {
             self.expect("(")?;
-            let n = self.number()? as u8;
+            let n = self.dice_total()?;
             self.expect(")")?;
             return Ok(Trigger::Total(n));
         }
@@ -426,7 +584,7 @@ impl Parser {
         {
             self.at += 2;
             self.expect("on")?;
-            return Ok(Trigger::ComePointEstablished(self.number()? as u8));
+            return Ok(Trigger::ComePointEstablished(self.box_number()?));
         }
         if self.peek().eq_ignore_ascii_case("dont")
             && self.peek_at(1).eq_ignore_ascii_case("come")
@@ -434,23 +592,48 @@ impl Parser {
         {
             self.at += 3;
             self.expect("on")?;
-            return Ok(Trigger::DontComePointEstablished(self.number()? as u8));
+            return Ok(Trigger::DontComePointEstablished(self.box_number()?));
         }
         if self.eat("win") {
             self.expect("of")?;
-            return Ok(Trigger::Win(self.bet_ref()?));
+            return Ok(Trigger::Win(self.recorded_bet_ref("wins and loses")?));
         }
         if self.eat("loss") {
             self.expect("of")?;
-            return Ok(Trigger::Loss(self.bet_ref()?));
+            return Ok(Trigger::Loss(self.recorded_bet_ref("wins and loses")?));
         }
         self.err("expected a trigger")
+    }
+
+    /// A bet that keeps a record of its own.
+    ///
+    /// Odds do not: they resolve with the flat they back, and the engine
+    /// books the result against that flat. `on win of odds on pass` therefore
+    /// meant exactly `on win of pass`, and `paid(odds on pass)` read the line
+    /// bet's payout — a distinction the grammar drew and the semantics did
+    /// not have, which is the kind of quiet disagreement Principle 4 exists
+    /// to refuse.
+    fn recorded_bet_ref(&mut self, what: &str) -> Result<BetRef, ParseError> {
+        let line = self.line();
+        let token = self.peek().to_owned();
+        let bet = self.bet_ref()?;
+        if is_odds_ref(bet) {
+            return Err(ParseError {
+                line,
+                token,
+                what: format!("odds have no record of their own; the bet behind them {what}"),
+            });
+        }
+        Ok(bet)
     }
 }
 
 impl Parser {
     fn expr(&mut self) -> Result<Expr, ParseError> {
-        self.or_expr()
+        self.descend()?;
+        let e = self.or_expr();
+        self.expr_depth -= 1;
+        e
     }
 
     fn or_expr(&mut self) -> Result<Expr, ParseError> {
@@ -513,11 +696,19 @@ impl Parser {
     }
 
     fn unary(&mut self) -> Result<Expr, ParseError> {
+        // `not not not …` and `- - - …` recurse here without passing through
+        // `expr`, so this arm counts its own descent.
         if self.eat("not") {
-            return Ok(Expr::Not(Box::new(self.unary()?)));
+            self.descend()?;
+            let e = self.unary().map(|e| Expr::Not(Box::new(e)));
+            self.expr_depth -= 1;
+            return e;
         }
         if self.eat("-") {
-            return Ok(Expr::Neg(Box::new(self.unary()?)));
+            self.descend()?;
+            let e = self.unary().map(|e| Expr::Neg(Box::new(e)));
+            self.expr_depth -= 1;
+            return e;
         }
         self.primary()
     }
@@ -556,7 +747,14 @@ impl Parser {
         ] {
             if self.peek().eq_ignore_ascii_case(word) && self.peek_at(1) == "(" {
                 self.at += 2;
-                let b = self.bet_ref()?;
+                // `stake` and `up` ask what is on the felt, which odds
+                // answer for themselves. The history reads ask what a bet
+                // has done, which odds have no record of.
+                let b = if make <= 1 {
+                    self.bet_ref()?
+                } else {
+                    self.recorded_bet_ref("keeps the record")?
+                };
                 self.expect(")")?;
                 return Ok(Expr::Read(match make {
                     0 => Read::Stake(b),
@@ -576,7 +774,14 @@ impl Parser {
         ] {
             if self.peek().eq_ignore_ascii_case(word) && self.peek_at(1) == "(" {
                 self.at += 2;
-                let n = self.number()? as u8;
+                // Hits are counted per dice total; come points sit on box
+                // numbers. Both index fixed-size tables, so neither may be
+                // handed a number the table has no room for.
+                let n = if make < 2 {
+                    self.dice_total()?
+                } else {
+                    self.box_number()?
+                };
                 self.expect(")")?;
                 return Ok(Expr::Read(match make {
                     0 => Read::Hits(n),
@@ -634,6 +839,19 @@ impl Parser {
     /// stake. `bet pass` is how a player says it, and making them write
     /// `bet pass pressed` on a table where nothing presses would be the
     /// language describing the engine rather than the game.
+    /// An amount that has to be written down.
+    ///
+    /// Leaving it off `bet` means "whatever this stream presses to", which is
+    /// how a player says it. Leaving it off `press … to` is a sentence that
+    /// stopped mid-word, and giving it the same silent default would hand an
+    /// obviously unfinished line a meaning its author never chose.
+    fn required_amount(&mut self, verb: &str) -> Result<AmountExpr, ParseError> {
+        if self.at_statement_boundary() {
+            return self.err(&format!("expected the amount to {verb} to"));
+        }
+        self.amount()
+    }
+
     fn amount(&mut self) -> Result<AmountExpr, ParseError> {
         if self.at_statement_boundary() {
             return Ok(AmountExpr::Pressed);
@@ -787,6 +1005,13 @@ impl Parser {
             .unwrap_or_default();
         self.expect("{")?;
         self.depth += 1;
+        // Blocks nest by re-reading their body once per value, so depth is
+        // multiplicative in rules and recursive in stack frames. Two levels
+        // is what a real strategy uses; this is the backstop that keeps a
+        // pasted file from being either.
+        if self.depth > MAX_BLOCK_DEPTH {
+            return self.err("blocks nest too deeply");
+        }
         let body_start = self.at;
 
         let mut out = Vec::new();
@@ -845,17 +1070,17 @@ impl Parser {
         if self.eat("press") {
             if let Some(members) = self.group() {
                 self.expect("to")?;
-                let a = self.amount()?;
+                let a = self.required_amount("press")?;
                 return Ok(members.iter().map(|b| Stmt::Press(*b, a.clone())).collect());
             }
             let b = self.bet_ref()?;
             self.expect("to")?;
-            return Ok(vec![Stmt::Press(b, self.amount()?)]);
+            return Ok(vec![Stmt::Press(b, self.required_amount("press")?)]);
         }
         if self.eat("regress") {
             if let Some(members) = self.group() {
                 self.expect("to")?;
-                let a = self.amount()?;
+                let a = self.required_amount("regress")?;
                 return Ok(members
                     .iter()
                     .map(|b| Stmt::Regress(*b, a.clone()))
@@ -863,7 +1088,7 @@ impl Parser {
             }
             let b = self.bet_ref()?;
             self.expect("to")?;
-            return Ok(vec![Stmt::Regress(b, self.amount()?)]);
+            return Ok(vec![Stmt::Regress(b, self.required_amount("regress")?)]);
         }
         if self.eat("down") {
             if let Some(members) = self.group() {
@@ -918,6 +1143,7 @@ pub fn parse(src: &str) -> Result<Strategy, ParseError> {
         at: 0,
         vars: Vec::new(),
         bindings: Vec::new(),
+        expr_depth: 0,
     };
 
     p.expect("strategy")?;
@@ -927,6 +1153,19 @@ pub fn parse(src: &str) -> Result<Strategy, ParseError> {
         .and_then(|s| s.strip_suffix('"'))
         .unwrap_or(&name_tok)
         .to_owned();
+    // The text form is the save format, and these two characters break it:
+    // a `#` starts a comment, so the header would truncate mid-quote and the
+    // file would not read back; a `"` closes the name early and it would read
+    // back as a different strategy. Refused at the door rather than escaped,
+    // because a name nobody can type into the editor is not worth a escape
+    // syntax nobody would remember.
+    if name.contains('#') || name.contains('"') {
+        return Err(ParseError {
+            line: p.line(),
+            token: name.clone(),
+            what: "a strategy name cannot contain \" or #".to_owned(),
+        });
+    }
     p.expect("language")?;
     let version = p.number()?;
     if version != LANGUAGE_VERSION as i64 {
@@ -941,13 +1180,35 @@ pub fn parse(src: &str) -> Result<Strategy, ParseError> {
 
     // Declarations first: memory, then pressing. Both before any rule, so a
     // rule can never refer to something declared after it.
+    let mut var_init: Vec<i64> = Vec::new();
     while p.peek().eq_ignore_ascii_case("var") {
         p.at += 1;
+        let name_line = p.line();
         let name = p.next();
-        if p.eat("=") {
-            let _ = p.number()?; // slots start at zero; the initial value is documentation
+        if name.is_empty() {
+            return p.err("expected a name for the memory slot");
         }
+        if RESERVED_WORDS.iter().any(|w| name.eq_ignore_ascii_case(w)) {
+            return Err(ParseError {
+                line: name_line,
+                token: name,
+                what: "that word already means something in the language".to_owned(),
+            });
+        }
+        if p.vars.iter().any(|v| v.eq_ignore_ascii_case(&name)) {
+            return Err(ParseError {
+                line: name_line,
+                token: name,
+                what: "that memory slot is already declared".to_owned(),
+            });
+        }
+        // The initial value is honoured, not documentation. It read as
+        // initialization to everyone who wrote one, and a slot that started
+        // at zero regardless was a strategy quietly playing a different
+        // system than the one on the page.
+        let init = if p.eat("=") { p.number()? } else { 0 };
         p.vars.push(name);
+        var_init.push(init);
     }
 
     let mut progressions = [Progression::Flat; STREAMS];
@@ -970,10 +1231,23 @@ pub fn parse(src: &str) -> Result<Strategy, ParseError> {
         };
         p.at += 2;
         if p.eat("for") {
+            let line = p.line();
+            let token = p.peek().to_owned();
             let bet = p.bet_ref()?;
+            // Odds have no stream of their own — `stream_of` answers with the
+            // flat's — so attaching a system to them would quietly attach it
+            // to the pass line instead. Naming a distinction the engine does
+            // not have is worse than refusing it.
+            if is_odds_ref(bet) {
+                return Err(ParseError {
+                    line,
+                    token,
+                    what: "odds ride the bet behind them and press with it".to_owned(),
+                });
+            }
             match stream_of(bet) {
                 Some(i) => progressions[i] = prog,
-                None => return p.err("odds press with the flat behind them"),
+                None => return p.err("that bet has no pressing system of its own"),
             }
         } else {
             progressions = [prog; STREAMS];
@@ -990,6 +1264,7 @@ pub fn parse(src: &str) -> Result<Strategy, ParseError> {
     Ok(Strategy {
         name,
         vars: p.vars,
+        var_init,
         rules,
         progressions,
         blocks,
@@ -1131,11 +1406,16 @@ fn expr_prec(e: &Expr, vars: &[String], parent: u8) -> String {
             // either side of a comparison needs its own brackets, or
             // `a < b < c` comes back as something the grammar cannot read.
             let left = if is_comparison(*o) { p + 1 } else { p };
+            // A bare number compared against a money read is money, and is
+            // written as money. Confined to a comparison's own operands: the
+            // 2 in `stake(place 6) * 2` is a multiplier, not two cents, and
+            // the round-trip law would catch it if this guessed wider.
+            let money = is_comparison(*o) && (is_money_expr(a) || is_money_expr(b));
             let text = format!(
                 "{} {} {}",
-                expr_prec(a, vars, left),
+                operand_text(a, vars, left, money),
                 op_text(*o),
-                expr_prec(b, vars, p + 1)
+                operand_text(b, vars, p + 1, money)
             );
             if p < parent {
                 format!("({text})")
@@ -1152,10 +1432,65 @@ fn amount_text(a: &AmountExpr, vars: &[String]) -> String {
         AmountExpr::Pressed => "pressed".into(),
         AmountExpr::MaxOdds => "max".into(),
         AmountExpr::Units(e) => format!("{} units", expr_text(e, vars)),
-        // A bare amount is already cents — the unit this engine has — so
-        // saying so adds a word and no information.
+        // An amount is money, so a plain number in one is written the way
+        // money is written. The engine's unit is the cent and always was;
+        // handing `15000` back to somebody who typed `$150` was the text
+        // form describing the engine rather than the game.
+        AmountExpr::Cents(Expr::Const(v)) if *v >= 0 => money_text(*v),
         AmountExpr::Cents(e) => expr_text(e, vars),
     }
+}
+
+/// Cents as a person writes them: `$150`, `$12.50`.
+///
+/// Only ever used for a value that reads back as the same number — a
+/// negative constant is left in plain cents, because `-$200` re-reads as a
+/// negation applied to a positive literal, which is a different tree from a
+/// negative literal and the round-trip law is about the tree.
+fn money_text(cents: i64) -> String {
+    let whole = cents / 100;
+    let frac = (cents % 100).abs();
+    if frac == 0 {
+        format!("${whole}")
+    } else {
+        format!("${whole}.{frac:02}")
+    }
+}
+
+/// Reads whose value is money, so a number compared against one is money too.
+fn is_money_expr(e: &Expr) -> bool {
+    matches!(
+        e,
+        Expr::Read(
+            Read::Cash
+                | Read::Wealth
+                | Read::Profit
+                | Read::PeakProfit
+                | Read::Drawdown
+                | Read::Handle
+                | Read::OnTableFace
+                | Read::Stake(_)
+                | Read::Paid(_)
+        )
+    )
+}
+
+/// One side of a comparison, written as money when the other side is money.
+fn operand_text(e: &Expr, vars: &[String], parent: u8, money: bool) -> String {
+    if money {
+        match e {
+            Expr::Const(v) if *v >= 0 => return money_text(*v),
+            Expr::Neg(inner) => {
+                if let Expr::Const(v) = inner.as_ref() {
+                    if *v >= 0 {
+                        return format!("-{}", money_text(*v));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    expr_prec(e, vars, parent)
 }
 
 /// Join a statement's words, dropping an amount that renders to nothing.
@@ -1234,16 +1569,11 @@ pub fn block_holds(s: &Strategy, b: &crate::strategy::ast::Block) -> bool {
         return false;
     }
     for (k, v) in b.values.iter().enumerate() {
-        let src = format!(
-            "strategy \"x\" language {LANGUAGE_VERSION}\nfor each of {v} as {} {{\n{}\n}}\n",
-            b.name, b.body
-        );
-        let Ok(mut one) = parse(&src) else {
-            return false;
-        };
-        one.vars.clone_from(&s.vars);
-        // Re-parsing without the strategy's memory declared would fail on
-        // any rule that touches it, so parse again with them in scope.
+        // The strategy's memory has to be in scope: a block body that reads
+        // or sets a slot cannot be parsed without it, and an earlier version
+        // tried the bare parse first and gave up when it failed — so every
+        // block that touched memory silently stopped being a block on the
+        // first save, taking the author's comments with it.
         let src = format!(
             "strategy \"x\" language {LANGUAGE_VERSION}\n{}\nfor each of {v} as {} {{\n{}\n}}\n",
             s.vars
@@ -1290,8 +1620,9 @@ pub fn render(s: &Strategy) -> String {
 
     if !s.vars.is_empty() {
         out.push('\n');
-        for v in &s.vars {
-            out += &format!("var {v} = 0\n");
+        for (i, v) in s.vars.iter().enumerate() {
+            let init = s.var_init.get(i).copied().unwrap_or(0);
+            out += &format!("var {v} = {init}\n");
         }
     }
 
@@ -1730,9 +2061,70 @@ on roll when profit <= -$200 or profit >= $150:
 
     #[test]
     fn a_come_point_trigger_needs_a_box_number() {
-        let s = parse("strategy \"v\" language 1\non come point on 7:\n    bet pass\n").unwrap();
+        // Refused where it is written, so the message can point at the line
+        // the 7 is on. The compiler keeps its own check for trees that were
+        // built rather than typed.
+        let e =
+            parse("strategy \"v\" language 1\non come point on 7:\n    bet pass\n").unwrap_err();
+        assert!(e.message().contains("not a box number"), "{}", e.message());
+        assert_eq!(e.line, 2);
+
+        let mut s =
+            parse("strategy \"v\" language 1\non come point on 6:\n    bet pass\n").unwrap();
+        s.rules[0].trigger = Trigger::ComePointEstablished(7);
         let e = crate::strategy::compile(&s).unwrap_err();
         assert!(e.message().contains("not a box number"), "{}", e.message());
+    }
+
+    #[test]
+    fn a_number_out_of_range_is_refused_rather_than_wrapped() {
+        // `place 260` used to wrap through `as u8` into a perfectly legal
+        // place 4, and `total(263)` into a trigger that fired on every seven.
+        for (src, expect) in [
+            (
+                "strategy \"x\" language 1\non roll:\n bet place 260 base\n",
+                "not a place number",
+            ),
+            (
+                "strategy \"x\" language 1\non total(263):\n bet pass\n",
+                "not a dice total",
+            ),
+            (
+                "strategy \"x\" language 1\non total(13):\n bet pass\n",
+                "not a dice total",
+            ),
+            (
+                "strategy \"x\" language 1\non roll:\n bet odds on come 7\n",
+                "not a box number",
+            ),
+            (
+                "strategy \"x\" language 1\non roll when hits(400) > 0:\n bet pass\n",
+                "not a dice total",
+            ),
+        ] {
+            let e = parse(src).unwrap_err();
+            assert!(e.message().contains(expect), "{}: {}", src, e.message());
+        }
+    }
+
+    #[test]
+    fn odds_are_refused_where_they_would_quietly_mean_the_flat() {
+        // The grammar drew a distinction the engine does not have: odds keep
+        // no record of their own and press with the bet behind them, so
+        // these read as the flat and said nothing about it.
+        for src in [
+            "strategy \"x\" language 1\non win of odds on pass:\n bet pass\n",
+            "strategy \"x\" language 1\non roll when paid(odds on pass) > 0:\n bet pass\n",
+            "strategy \"x\" language 1\npress martingale for odds on pass\non roll:\n bet pass\n",
+        ] {
+            let e = parse(src).unwrap_err();
+            assert!(e.message().contains("odds"), "{}: {}", src, e.message());
+        }
+        // But the felt reads still answer for them, and so does `bet`.
+        assert!(parse(
+            "strategy \"x\" language 1\non roll when up(odds on pass) == 0:\n bet odds on pass max\n"
+        )
+        .is_ok());
     }
 
     #[test]
@@ -1784,9 +2176,11 @@ on roll when profit <= -$200 or profit >= $150:
                 "strategy \"x\" language 1\non roll:\n bet flurb base\n",
                 "flurb",
             ),
+            // The number itself, not whatever word follows it. The offending
+            // token is the one the author typed.
             (
                 "strategy \"x\" language 1\non roll:\n bet place 7 base\n",
-                "base",
+                "7",
             ),
             (
                 "strategy \"x\" language 1\non roll:\n set nope = 1\n",
@@ -1821,7 +2215,21 @@ on roll when profit <= -$200 or profit >= $150:
     /// directly.
     #[test]
     fn malformed_input_is_refused_rather_than_fatal() {
-        let good = "strategy \"s\" language 1\non come-out:\n    bet pass\n";
+        // Several seeds rather than one three-line strategy: a truncation
+        // sweep can only reach the grammar its seed uses, and the old seed
+        // had no memory, no guard, no block, no money and no quoted name —
+        // which is most of what a person actually mistypes.
+        let seeds = [
+            "strategy \"s\" language 1\non come-out:\n    bet pass\n",
+            "strategy \"s\" language 1\n\nvar hits = 2\n\npress martingale for pass\n\n\
+             on win of place 6 when hits >= 2 and profit > $150:\n    \
+             press place 6 to stake(place 6) * 2\n    set hits = 0\n",
+            "strategy \"s\" language 1\n\nfor each of 6, 8 as n {\n    \
+             on roll when point != 0 and point != n:  # a note\n        \
+             bet place n base\n}\n",
+            "strategy \"s\" language 1\non roll when min(cash, $1,000) <= -$20.50:\n    \
+             down all place\n    leave \"enough\"\n",
+        ];
         let mut cases: Vec<String> = vec![
             String::new(),
             " ".into(),
@@ -1848,16 +2256,23 @@ on roll when profit <= -$200 or profit >= $150:
             "strategy \"s\" language 1\non roll: bet pass ".to_owned() + &"(".repeat(500),
             "strategy \"s\" language 1\non roll: bet pass 999999999999999999999".into(),
         ];
-        // Every truncation of a valid strategy, which is what a half-typed
-        // one looks like.
-        for k in 0..good.len() {
-            cases.push(good[..k].to_owned());
-        }
-        // And every single-byte deletion, which is what a typo looks like.
-        for k in 0..good.len() {
-            let mut c = good.to_owned();
-            c.remove(k);
-            cases.push(c);
+        for seed in seeds {
+            // Every truncation of a valid strategy, which is what a
+            // half-typed one looks like.
+            for k in 0..seed.len() {
+                if seed.is_char_boundary(k) {
+                    cases.push(seed[..k].to_owned());
+                }
+            }
+            // And every single-byte deletion, which is what a typo looks
+            // like.
+            for k in 0..seed.len() {
+                if seed.is_char_boundary(k) {
+                    let mut c = seed.to_owned();
+                    c.remove(k);
+                    cases.push(c);
+                }
+            }
         }
         for src in cases {
             match parse(&src) {
@@ -1875,6 +2290,151 @@ on roll when profit <= -$200 or profit >= $150:
         }
     }
 
+    /// Nesting is bounded, because the parser walks it on the native stack
+    /// and strategy text arrives by paste.
+    #[test]
+    fn deep_nesting_is_refused_rather_than_fatal() {
+        for body in [
+            format!("{}1{}", "(".repeat(100_000), ")".repeat(100_000)),
+            "not ".repeat(100_000) + "1",
+            "-".repeat(100_000) + "1",
+            "(".repeat(100_000),
+        ] {
+            let src = format!("strategy \"x\" language 1\non roll when {body} == 1:\n bet pass\n");
+            let e = parse(&src).expect_err("should refuse, not overflow the stack");
+            assert!(e.message().contains("nests too deeply"), "{}", e.message());
+        }
+        // Blocks nest by re-reading their body once per value, so they are
+        // multiplicative in rules as well as recursive in frames.
+        let deep = "for each of 1, 2 as x { ".repeat(200) + &"}".repeat(200);
+        let e = parse(&format!("strategy \"x\" language 1\n{deep}\n"))
+            .expect_err("should refuse, not overflow the stack");
+        assert!(e.message().contains("nest too deeply"), "{}", e.message());
+    }
+
+    /// Memory starts where the strategy says it starts.
+    #[test]
+    fn a_declared_initial_value_is_kept() {
+        let s = parse("strategy \"x\" language 1\nvar mult = 3\non roll:\n bet pass $5 * mult\n")
+            .unwrap();
+        assert_eq!(s.var_init, vec![3]);
+        assert_eq!(crate::strategy::compile(&s).unwrap().var_init, vec![3]);
+        round_trip(&s);
+        // And a slot with no initializer starts at nothing, as it always did.
+        let s = parse("strategy \"x\" language 1\nvar n\non roll:\n bet pass\n").unwrap();
+        assert_eq!(s.var_init, vec![0]);
+    }
+
+    /// A memory slot may not take a name the grammar already reads.
+    #[test]
+    fn a_memory_slot_cannot_take_a_word_the_language_owns() {
+        for name in ["point", "cash", "profit", "roll", "min", "max", "base"] {
+            let src = format!("strategy \"x\" language 1\nvar {name} = 0\non roll:\n bet pass\n");
+            let e = parse(&src).expect_err("{name} should be refused");
+            assert!(e.message().contains("already means"), "{name}");
+        }
+        // But the parameterized reads are only reads when a `(` follows, so
+        // these are perfectly good names and people use them.
+        for name in ["hits", "streak", "paid", "stake", "wins"] {
+            let src = format!(
+                "strategy \"x\" language 1\nvar {name} = 0\n\
+                 on roll when {name} < 2:\n set {name} = {name} + 1\n bet pass\n"
+            );
+            assert!(parse(&src).is_ok(), "{name} should be a usable name");
+        }
+        let twice = "strategy \"x\" language 1\nvar a = 0\nvar a = 1\non roll:\n bet pass\n";
+        assert!(parse(twice)
+            .expect_err("a duplicate slot is a mistake")
+            .message()
+            .contains("already declared"));
+    }
+
+    /// The text form is the save format, so a name has to survive it.
+    #[test]
+    fn a_name_that_would_break_the_file_is_refused() {
+        for name in ["a # b", "a \" b"] {
+            let src = format!("strategy \"{name}\" language 1\non roll:\n bet pass\n");
+            assert!(parse(&src).is_err(), "{name:?} should be refused");
+        }
+        // Everything else a person would call a strategy still works.
+        for name in ["44 Inside, regressed", "don't-pass darling", "Ünïcødé 🎲"] {
+            let src = format!("strategy \"{name}\" language 1\non roll:\n bet pass\n");
+            let s = parse(&src).unwrap_or_else(|e| panic!("{name:?}: {}", e.message()));
+            assert_eq!(s.name, name);
+            round_trip(&s);
+        }
+    }
+
+    /// `press place 6 to` is a sentence that stopped mid-word.
+    #[test]
+    fn a_press_with_no_amount_is_refused() {
+        let e = parse(
+            "strategy \"x\" language 1\non win of place 6:\n press place 6 to\non roll:\n bet pass\n",
+        )
+        .expect_err("a dangling press should not quietly mean `to pressed`");
+        assert!(e.message().contains("amount to press"), "{}", e.message());
+        // `bet` keeps its optional amount, which is how a player says it.
+        assert!(parse("strategy \"x\" language 1\non roll:\n bet pass\n").is_ok());
+    }
+
+    /// A block that touches memory is still a block.
+    #[test]
+    fn a_block_that_uses_memory_survives_a_round_trip() {
+        // It did not: `block_holds` re-read the body without the strategy's
+        // memory in scope, that parse failed, and the block silently unrolled
+        // into copies — taking the author's comments with it.
+        let src = "strategy \"x\" language 1\n\nvar hits = 0\n\n\
+                   for each of 6, 8 as n {\n    \
+                   on win of place n:  # counts both numbers\n        \
+                   set hits = hits + 1\n}\n\non roll when point != 0:\n    bet place 6 base\n";
+        let s = parse(src).unwrap_or_else(|e| panic!("{}", e.message()));
+        assert_eq!(s.blocks.len(), 1, "the block was recorded");
+        let out = render(&s);
+        assert!(
+            out.contains("for each of 6, 8 as n"),
+            "still a block:\n{out}"
+        );
+        assert!(
+            out.contains("# counts both numbers"),
+            "comment kept:\n{out}"
+        );
+        round_trip(&s);
+    }
+
+    /// Money is written the way money is written.
+    #[test]
+    fn money_renders_as_money() {
+        let src = "strategy \"x\" language 1\n\n\
+                   on roll when profit >= $150 or profit <= -$200:\n    leave\n\
+                   on roll when cash > $12.50:\n    bet place 6 $18\n";
+        let s = parse(src).unwrap_or_else(|e| panic!("{}", e.message()));
+        let out = render(&s);
+        assert!(out.contains("profit >= $150"), "{out}");
+        assert!(out.contains("profit <= -$200"), "{out}");
+        assert!(out.contains("cash > $12.50"), "{out}");
+        assert!(out.contains("bet place 6 $18"), "{out}");
+        round_trip(&s);
+        // A count compared against a count stays a count: the 2 in
+        // `hits(8) >= 2` is two hits, not two cents.
+        let s =
+            parse("strategy \"x\" language 1\non roll when hits(8) >= 2:\n bet pass\n").unwrap();
+        let out = render(&s);
+        assert!(out.contains("hits(8) >= 2"), "{out}");
+        round_trip(&s);
+    }
+
+    /// A comma inside money is a thousands separator only when it separates
+    /// thousands — otherwise it is the argument list's own punctuation.
+    #[test]
+    fn a_comma_after_money_still_separates_arguments() {
+        let s =
+            parse("strategy \"x\" language 1\non roll when min($5, cash) > 0:\n bet pass $1,000\n")
+                .unwrap_or_else(|e| panic!("{}", e.message()));
+        round_trip(&s);
+        assert_eq!(parse_money("$1,000"), Some(100_000));
+        assert_eq!(parse_money("$5"), Some(500));
+    }
+
     /// Randomized trees, so the law is tested against shapes nobody thought
     /// to write by hand.
     #[test]
@@ -1890,27 +2450,50 @@ on roll when profit <= -$200 or profit >= $150:
             }
         }
         let mut g = Lcg(12345);
-        const BETS: [BetRef; 9] = [
+        // Every bet reference the grammar spells, the numbered odds included
+        // — an earlier version covered nine of thirteen, and the law went
+        // untested on exactly the shapes whose rendering is fiddliest.
+        const BETS: [BetRef; 13] = [
             BetRef::Pass,
+            BetRef::PassOdds,
             BetRef::DontPass,
+            BetRef::DontPassLay,
             BetRef::Come,
-            BetRef::Field,
+            BetRef::DontCome,
+            BetRef::ComeOdds(6),
+            BetRef::DontComeLay(10),
             BetRef::Place(6),
             BetRef::Place(10),
             BetRef::Hardway(8),
+            BetRef::Field,
             BetRef::AnySeven,
-            BetRef::PassOdds,
         ];
-        const TRIGGERS: [Trigger; 7] = [
+        /// Bets that keep a record of their own, so may stand in a win/loss
+        /// trigger or a history read.
+        const RECORDED: [BetRef; 8] = [
+            BetRef::Pass,
+            BetRef::DontPass,
+            BetRef::Come,
+            BetRef::DontCome,
+            BetRef::Place(5),
+            BetRef::Place(9),
+            BetRef::Hardway(4),
+            BetRef::AnyCraps,
+        ];
+        const TRIGGERS: [Trigger; 11] = [
+            Trigger::SessionStart,
             Trigger::ComeOut,
             Trigger::Roll,
             Trigger::PointEstablished,
             Trigger::PointMade,
             Trigger::SevenOut,
             Trigger::Total(7),
+            Trigger::Total(12),
+            Trigger::ComePointEstablished(6),
+            Trigger::DontComePointEstablished(4),
             Trigger::Win(BetRef::Place(6)),
         ];
-        const OPS: [BinOp; 8] = [
+        const OPS: [BinOp; 14] = [
             BinOp::Add,
             BinOp::Sub,
             BinOp::Mul,
@@ -1918,15 +2501,51 @@ on roll when profit <= -$200 or profit >= $150:
             BinOp::Min,
             BinOp::Max,
             BinOp::Lt,
+            BinOp::Le,
+            BinOp::Gt,
+            BinOp::Ge,
+            BinOp::Eq,
+            BinOp::Ne,
             BinOp::And,
+            BinOp::Or,
         ];
-        const READS: [Read; 6] = [
+        // All twenty-five, so the money-rendering rule is exercised against
+        // both the reads it applies to and the reads it must leave alone.
+        const READS: [Read; 25] = [
             Read::Point,
+            Read::ComeOut,
+            Read::LastTotal,
+            Read::Roll,
+            Read::RollsThisShooter,
+            Read::Shooter,
+            Read::Cash,
+            Read::Wealth,
             Read::Profit,
+            Read::PeakProfit,
+            Read::Drawdown,
+            Read::Handle,
             Read::LiveCome,
+            Read::LiveDontCome,
+            Read::OnTableFace,
             Read::Hits(8),
+            Read::HitsThisShooter(4),
+            Read::ComePoint(6),
+            Read::DontComePoint(10),
             Read::Streak(BetRef::Pass),
             Read::Stake(BetRef::Place(6)),
+            Read::Up(BetRef::PassOdds),
+            Read::Wins(BetRef::Come),
+            Read::Losses(BetRef::Field),
+            Read::Paid(BetRef::Place(8)),
+        ];
+        // Names that stress the tokenizer rather than flatter it.
+        const NAMES: [&str; 6] = [
+            "case",
+            "44 Inside, regressed",
+            "don't-pass darling",
+            "  padded  ",
+            "press martingale for pass",
+            "Ünïcødé 🎲",
         ];
 
         for case in 0..400 {
@@ -1973,7 +2592,12 @@ on roll when profit <= -$200 or profit >= $150:
                         _ => Stmt::Set((g.next() % 2) as u16, expr(&mut g, 2)),
                     });
                 }
-                let mut r = Rule::new(g.pick(&TRIGGERS), body);
+                let trigger = match g.next() % 8 {
+                    0 => Trigger::Win(g.pick(&RECORDED)),
+                    1 => Trigger::Loss(g.pick(&RECORDED)),
+                    _ => g.pick(&TRIGGERS),
+                };
+                let mut r = Rule::new(trigger, body);
                 if g.next().is_multiple_of(2) {
                     r.guard = Some(expr(&mut g, 3));
                 }
@@ -1989,8 +2613,12 @@ on roll when profit <= -$200 or profit >= $150:
                 }
             }
             let s = Strategy {
-                name: format!("case {case}"),
+                name: format!("{} {case}", g.pick(&NAMES)),
                 vars,
+                // Non-zero initial values, because a slot that starts
+                // somewhere has to survive the round trip like everything
+                // else does.
+                var_init: vec![(g.next() % 400) as i64 - 200, 0],
                 rules,
                 progressions,
                 blocks: Vec::new(),

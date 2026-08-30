@@ -64,6 +64,9 @@ pub struct BenchTrace {
     /// by running rather than by proving.
     pub fire_counts: Vec<u32>,
     pub outcome: SessionOutcomes,
+    /// The horizon this night was run against, kept so the trace can tell a
+    /// night that ran out from a night that walked.
+    pub horizon_rolls: u64,
 }
 
 impl BenchTrace {
@@ -120,6 +123,13 @@ impl BenchTrace {
         }
     }
 
+    /// Whether the session stopped short of the horizon it was given without
+    /// busting or reaching its target — which leaves one way it can have
+    /// happened: a rule said `leave`.
+    fn left_early(&self) -> bool {
+        self.outcome.horizon.rolls < self.horizon_rolls
+    }
+
     /// How the night ended, in words. The Bench computed this from the
     /// first version and then discarded it; a session you can step through
     /// without being told whether it busted is a story with no last page.
@@ -129,6 +139,11 @@ impl BenchTrace {
             "the bankroll could no longer cover a bet"
         } else if h.hit_target {
             "the quit-while-ahead target was reached"
+        } else if self.left_early() {
+            // A `leave` rule ended the night on its own terms. Calling that
+            // "ran its full length" contradicted the roll count sitting
+            // beside it and had readers believing their stop-loss was dead.
+            "the strategy left the table on its own terms"
         } else {
             // The roll cap and the session length coincide whenever a night
             // is replayed over its own horizon, so naming the cap here would
@@ -235,6 +250,7 @@ pub fn bench_session(
         rolls: bench.rolls,
         fire_counts: bench.fire_counts,
         outcome,
+        horizon_rolls,
     }
 }
 
@@ -258,6 +274,89 @@ mod tests {
 
     fn program(src: &str) -> Program {
         compile(&parse(src).unwrap_or_else(|e| panic!("{}", e.message()))).unwrap()
+    }
+
+    /// A press the table accepted is a press the next win pays.
+    ///
+    /// It was not. A progression re-prices a bet where it resolves, and a
+    /// rule pressing at the decision point left the stream still thinking
+    /// the bet was worth its base — so the winner was torn back down to base
+    /// on the very hit it was riding, and `press to stake(…) * 2` recomputed
+    /// six-times-two forever. Every press-and-ride ladder in craps was
+    /// unreachable, and nothing said so.
+    #[test]
+    fn a_press_survives_the_win_it_rides() {
+        let r = rules();
+        let p = program(
+            "strategy \"ladder\" language 1\n\
+             on roll when point != 0 and point != 6:\n    bet place 6 base\n\
+             on win of place 6:\n    press place 6 to stake(place 6) * 2\n\
+             on roll when stake(place 6) >= $24:\n    leave\n",
+        );
+        let climbed: u32 = (0..40u64)
+            .map(|seed| bench_session(&p, &r, 500, 100_000, None, 300, 300, seed).fire_counts[2])
+            .sum();
+        assert!(
+            climbed > 0,
+            "the 6 never got past twice its base in forty sessions"
+        );
+    }
+
+    /// A press that would lower the bet is refused, and says so.
+    ///
+    /// This was the one refusal in the language that emitted nothing: the
+    /// rule fired, the Bench showed it firing, the layout did not move, and
+    /// no reason was given anywhere — which is the exact silence Principle 4
+    /// exists to forbid.
+    #[test]
+    fn a_press_in_the_wrong_direction_is_refused_out_loud() {
+        let r = rules();
+        let p = program(
+            "strategy \"backwards\" language 1\n\
+             on roll when point != 0 and point != 6:\n    bet place 6 base\n\
+             on win of place 6:\n    press place 6 to $1\n",
+        );
+        let mut refusals = 0;
+        let mut fired = 0;
+        for seed in 0..40u64 {
+            let t = bench_session(&p, &r, 500, 100_000, None, 300, 300, seed);
+            fired += t.fire_counts[1];
+            refusals += t
+                .refusals()
+                .iter()
+                .filter(|(_, e)| {
+                    matches!(
+                        e.event.kind,
+                        BetEventKind::Rejected {
+                            reason: crate::strategy::RejectReason::WrongDirection
+                        }
+                    )
+                })
+                .count();
+        }
+        assert!(fired > 0, "the press rule never fired at all");
+        assert_eq!(
+            refusals as u32, fired,
+            "every firing of a backwards press should have left a reason behind"
+        );
+    }
+
+    /// `on session-start` is a trigger the language spells, the compiler
+    /// compiles, and the editor offers. It fired never: no code path set the
+    /// bit, so every rule written on it compiled clean and did nothing.
+    #[test]
+    fn session_start_fires_once_at_the_start_of_a_session() {
+        let r = rules();
+        let p = program(
+            "strategy \"s\" language 1\n\
+             var buyin = 0\n\
+             on session-start:\n    set buyin = cash\n\
+             on come-out:\n    bet pass base\n",
+        );
+        for seed in 0..20u64 {
+            let t = bench_session(&p, &r, 500, 100_000, None, 300, 300, seed);
+            assert_eq!(t.fire_counts[0], 1, "seed {seed}: once, and exactly once");
+        }
     }
 
     /// Watching costs nothing that could change what is watched: the Bench

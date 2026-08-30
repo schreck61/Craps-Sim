@@ -205,10 +205,17 @@ impl SimConfig {
     /// Plain-language validation, or Ok. The Design screen's order-ticket
     /// strip renders these; Run is disabled while any exist.
     pub fn validate(&self) -> Result<(), String> {
-        if !self.sel.any_selected() {
+        // Which player is live decides what there is to validate. A strategy
+        // brings its own bets, and a pasted strategy sentence deliberately
+        // blanks the rail — so interrogating the bet rail here refused a
+        // perfectly good scenario with "Select at least one bet type", and
+        // the paste-a-sentence-and-run loop dead-ended at its last step.
+        let playing_strategy = self.strategy.is_some();
+        if !playing_strategy && !self.sel.any_selected() {
             return Err("Select at least one bet type.".to_owned());
         }
-        if self.sel.take_odds
+        if !playing_strategy
+            && self.sel.take_odds
             && !self.sel.pass_line
             && !self.sel.dont_pass
             && self.sel.come_max == 0
@@ -220,12 +227,18 @@ impl SimConfig {
             return Err("Enter at least one table minimum.".to_owned());
         }
         let rules = self.rules();
-        let unplayable: Vec<String> = self
-            .table_mins_cents
-            .iter()
-            .filter(|&&min| self.budget_cents < cheapest_selected_stake(&self.sel, &rules, min))
-            .map(|&m| crate::ui::numerals::money_text(m, false))
-            .collect();
+        // A strategy's cheapest bet is computed from its own rules, by the
+        // compiled program, at the moment it runs. Asking the bet rail what
+        // this costs would be asking a player who is not at the table.
+        let unplayable: Vec<String> = if playing_strategy {
+            Vec::new()
+        } else {
+            self.table_mins_cents
+                .iter()
+                .filter(|&&min| self.budget_cents < cheapest_selected_stake(&self.sel, &rules, min))
+                .map(|&m| crate::ui::numerals::money_text(m, false))
+                .collect()
+        };
         if !unplayable.is_empty() {
             return Err(format!(
                 "Budget ${} can't cover the first bet at table minimum(s) {} — raise the budget or remove them.",

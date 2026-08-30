@@ -36,7 +36,19 @@ pub enum CompileError {
     NoStreamOfItsOwn(BetRef),
     /// A come-point trigger named something that is not a box number.
     NotABoxNumber(u8),
+    /// A statement named a place or hardway number that does not exist.
+    NoSuchBet(BetRef),
+    /// More rules than one decision could walk and still be a decision.
+    TooManyRules { asked: usize, limit: usize },
 }
+
+impl std::fmt::Display for CompileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message())
+    }
+}
+
+impl std::error::Error for CompileError {}
 
 impl CompileError {
     /// The sentence the editor shows.
@@ -61,9 +73,44 @@ impl CompileError {
                 format!("{n} is not a box number (4, 5, 6, 8, 9 or 10).")
             }
             CompileError::NoStreamOfItsOwn(b) => format!(
-                "{b:?} has no win/loss record of its own — odds resolve with the flat behind them."
+                "{} has no win/loss record of its own — odds resolve with the flat behind them.",
+                crate::strategy::bet_name(*b)
             ),
+            CompileError::NoSuchBet(b) => {
+                format!("There is no such bet as {}.", crate::strategy::bet_name(*b))
+            }
+            CompileError::TooManyRules { asked, limit } => {
+                format!("This strategy has {asked} rules; a strategy may hold {limit}.")
+            }
         }
+    }
+}
+
+/// How many rules one strategy may hold.
+///
+/// Every rule is walked at every decision point, so the count is a per-roll
+/// cost paid across every session of every sweep. Blocks multiply rules by
+/// their value lists, and a file can be pasted or hand-written, so the
+/// ceiling is stated rather than left to whatever the machine survives.
+const MAX_RULES: usize = 512;
+
+/// A bet a statement named has to be a bet the table has.
+///
+/// The parser refuses these already; this catches a tree built any other
+/// way — the rule editor, a test, a future importer — before it reaches an
+/// adjudicator that would have to answer for a place 7.
+fn check_bet_ref(bet: BetRef) -> Result<(), CompileError> {
+    let ok = match bet {
+        BetRef::Place(n) | BetRef::ComeOdds(n) | BetRef::DontComeLay(n) => {
+            crate::place_index(n).is_some()
+        }
+        BetRef::Hardway(n) => crate::hard_index(n).is_some(),
+        _ => true,
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(CompileError::NoSuchBet(bet))
     }
 }
 
@@ -73,6 +120,12 @@ pub fn compile(s: &Strategy) -> Result<Program, CompileError> {
         return Err(CompileError::TooManyVars {
             asked: s.vars.len(),
             limit: MAX_VARS,
+        });
+    }
+    if s.rules.len() > MAX_RULES {
+        return Err(CompileError::TooManyRules {
+            asked: s.rules.len(),
+            limit: MAX_RULES,
         });
     }
 
@@ -108,6 +161,7 @@ pub fn compile(s: &Strategy) -> Result<Program, CompileError> {
         for stmt in &rule.body {
             match stmt {
                 Stmt::Bet(bet, amount) => {
+                    check_bet_ref(*bet)?;
                     if let Some(e) = amount_expr(amount) {
                         check_depth(e)?;
                         emit_expr(e, &mut ops, &mut features, s)?;
@@ -116,6 +170,7 @@ pub fn compile(s: &Strategy) -> Result<Program, CompileError> {
                     bets += 1;
                 }
                 Stmt::Press(bet, amount) | Stmt::Regress(bet, amount) => {
+                    check_bet_ref(*bet)?;
                     if let Some(e) = amount_expr(amount) {
                         check_depth(e)?;
                         emit_expr(e, &mut ops, &mut features, s)?;
@@ -126,10 +181,19 @@ pub fn compile(s: &Strategy) -> Result<Program, CompileError> {
                     } else {
                         Op::Regress(*bet, kind)
                     });
-                    bets += 1;
+                    // Deliberately not counted as a bet: pressing an empty
+                    // slot is always refused, so a strategy whose only action
+                    // is `press` can never put a cent at risk — which is
+                    // exactly what the never-bets check exists to say.
                 }
-                Stmt::Down(bet) => ops.push(Op::Down(*bet)),
-                Stmt::Working(bet, on) => ops.push(Op::Working(*bet, *on)),
+                Stmt::Down(bet) => {
+                    check_bet_ref(*bet)?;
+                    ops.push(Op::Down(*bet));
+                }
+                Stmt::Working(bet, on) => {
+                    check_bet_ref(*bet)?;
+                    ops.push(Op::Working(*bet, *on));
+                }
                 Stmt::Leave => ops.push(Op::Leave),
                 Stmt::Set(slot, e) => {
                     if *slot as usize >= s.vars.len() {
@@ -142,11 +206,16 @@ pub fn compile(s: &Strategy) -> Result<Program, CompileError> {
             }
         }
 
-        // Every rule that can fire contributes its bets to the worst case.
+        // Every rule that can fire contributes to the worst case, and every
+        // statement that reaches the table counts — not just `bet`. A press,
+        // a take-down, a working toggle and a leave all take a slot in the
+        // proposal buffer, whose overflow is silently dropped; counting only
+        // bets meant a decision could discard actions, including the `leave`
+        // that was supposed to end the session.
         worst_actions += rule
             .body
             .iter()
-            .filter(|b| matches!(b, Stmt::Bet(..)))
+            .filter(|b| !matches!(b, Stmt::Set(..)))
             .count();
 
         let end = ops.len() as u32;
@@ -188,10 +257,17 @@ pub fn compile(s: &Strategy) -> Result<Program, CompileError> {
     });
 
     let hash = hash_program(&s.name, &ops, features, &s.progressions);
+    // Slots start where the strategy says they start. Padded to the declared
+    // count so the session can seed memory without consulting the AST.
+    let mut var_init = vec![0i64; s.vars.len()];
+    for (slot, v) in var_init.iter_mut().enumerate() {
+        *v = s.var_init.get(slot).copied().unwrap_or(0);
+    }
     Ok(Program {
         name: s.name.clone(),
         ops,
         vars: s.vars.len() as u16,
+        var_init,
         features,
         placement_only,
         bets_one_roll,
@@ -207,6 +283,13 @@ pub fn compile(s: &Strategy) -> Result<Program, CompileError> {
 /// is the difference between a language that costs 5x the hand-written
 /// player and one that costs a fraction of that.
 fn fuse_guard(e: &Expr) -> Guard {
+    // `point != 0` on its own — the commonest single condition in the
+    // language, and the one this was missing. Checked ahead of `truthy_read`
+    // so it lands on the guard written for it rather than on the generic
+    // is-it-nonzero test.
+    if is_point_on(e) {
+        return Guard::PointOn;
+    }
     // `<read> != 0`
     if let Some(r) = truthy_read(e) {
         return Guard::Truthy(r);

@@ -986,6 +986,15 @@ fn paste_sentence(app: &mut App, ui: &mut egui::Ui) {
                                     want.name
                                 ));
                             }
+                            Resolution::Unsaved => {
+                                app.error = Some(format!(
+                                    "This sentence plays \"{}\", which is saved \
+                                     here — but the Rules tab is holding changes \
+                                     that are not on disk. Save or discard them, \
+                                     then paste the sentence again.",
+                                    want.name
+                                ));
+                            }
                         }
                     }
                     ui.ctx().data_mut(|d| d.insert_temp(id, String::new()));
