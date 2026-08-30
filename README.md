@@ -39,6 +39,20 @@ draws a fresh seed, so repeated runs give independent samples.
    random numbers), so head-to-head rankings are not distorted by luck, and
    re-ranking is instant — all five metrics are kept for every combination.
 
+5. **What if the strategy isn't on the list?** Write it. A strategy is a
+   header and an ordered list of rules — `on <trigger> when <condition>:
+   <actions>` — with pressing declared per bet stream. What a checkbox player
+   could never say is sayable: press the 6 on its own second hit, call the
+   place bets off until the shooter makes a point, Martingale the don't pass
+   while the place bets stay flat, stop at −$200 or +$150. The language is
+   deliberately not Turing-complete — no recursion, no unbounded loops, no
+   I/O — so every strategy is total and cost-bounded before it runs, which is
+   what makes it safe to execute an unreviewed one across every core. Rules
+   are built from typed slots where a syntax error is not representable, or
+   typed as text; both edit the same tree. Authored strategies are ranked
+   beside the curated eleven and can be duelled against any of them on
+   identical dice.
+
 ## The instrument
 
 One window, four modes: **Design** builds the player; **Findings** answers
@@ -66,6 +80,20 @@ provenance — scenario, seed, session count — baked into the pixels.
   D'Alembert, Reverse D'Alembert, Fibonacci, and Oscar's Grind — each bet
   stream pressing independently, with odds sized from the pressed flat and
   place/hardway winners pressed in place out of the winnings.
+- **A strategy language**: rules over triggers (`come-out`,
+  `point-established`, `come point on 6`, `win of place 6`, …) and conditions
+  over what the table can be asked — the point, the layout, the bankroll, the
+  buy-in, the table minimum and maximum, dice history, per-bet win/loss
+  records, and session memory. Bets can be placed, pressed to a figure or by
+  a step, regressed, taken down, turned off and on (including on the
+  come-out), and the table can be left on the strategy's own terms. Strategies
+  are saved as plain-text `.craps` files and travel in a shareable scenario
+  sentence by name and content hash, so a pasted scenario can never silently
+  run a strategy that has changed.
+- **The Bench**: a strategy's night stepped roll by roll, every rule that
+  fired marked, every cent attributed to the rule that asked for it or to the
+  table, and a fire count per rule — so a rule that never fires says so
+  instead of quietly doing nothing.
 - **Quit while ahead**: optional take-profit rule at a multiple of the
   starting budget.
 - **Performance**: hundreds of millions of dice rolls per second on a modern
