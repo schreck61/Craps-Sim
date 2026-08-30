@@ -122,8 +122,8 @@ pub fn paint(
                         craps_engine::trace::BetEventKind::TakenDown => "taken down".to_owned(),
                         craps_engine::trace::BetEventKind::Traveled { to } =>
                             format!("travels to {to}"),
-                        craps_engine::trace::BetEventKind::Rejected { reason } =>
-                            format!("refused — {}", reason.label()),
+                        craps_engine::trace::BetEventKind::Rejected { reason, what } =>
+                            format!("{} refused — {}", what.label(), reason.label()),
                         craps_engine::trace::BetEventKind::ClippedToMax =>
                             "clipped to table max".to_owned(),
                     },

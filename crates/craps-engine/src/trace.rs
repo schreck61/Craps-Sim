@@ -64,6 +64,29 @@ impl BetKind {
     }
 }
 
+/// What a strategy was trying to do when the table said no.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Attempted {
+    Bet,
+    Press,
+    Regress,
+    Down,
+    Working,
+}
+
+impl Attempted {
+    /// The verb, in the words the ledger shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            Attempted::Bet => "betting",
+            Attempted::Press => "pressing",
+            Attempted::Regress => "regressing",
+            Attempted::Down => "taking down",
+            Attempted::Working => "turning off or on",
+        }
+    }
+}
+
 /// What happened to a bet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BetEventKind {
@@ -95,7 +118,16 @@ pub enum BetEventKind {
     /// money moved. A strategy that quietly does nothing is the worst
     /// outcome the intent surface could allow, so every refusal is an
     /// event (STRATEGY_DSL.md Principle 4).
-    Rejected { reason: RejectReason },
+    /// `what` and the event's `stake_cents` say which action was refused and
+    /// how much it asked for. Without them a ledger could only report that
+    /// *something* about a bet was refused: a zero-stake bet from an
+    /// uninitialized counter read as "bankroll won't cover it" beside a full
+    /// bankroll, and a refusal on a place bet could have been the bet, a
+    /// press, a take-down or a working toggle from any of six rules.
+    Rejected {
+        reason: RejectReason,
+        what: Attempted,
+    },
     /// The requested stake exceeded the table maximum and was truncated to
     /// it; `stake_cents` is the amount actually bet. This is how a real
     /// table stops a Martingale, and it is shown rather than inferred from

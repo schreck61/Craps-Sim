@@ -539,7 +539,7 @@ fn refusal_index(app: &mut App, ui: &mut egui::Ui, trace: &BenchTrace, position:
                     RichText::new(label).font(FontId::new(type_scale::CAPTION, theme::mono())),
                 )
                 .on_hover_text(match e.event.kind {
-                    craps_engine::trace::BetEventKind::Rejected { reason } => reason.label(),
+                    craps_engine::trace::BetEventKind::Rejected { reason, .. } => reason.label(),
                     _ => "",
                 })
                 .clicked()
@@ -737,7 +737,22 @@ fn describe(
         K::Returned => (format!("{bet} — {amount} returned, unresolved"), t.ink2),
         K::TakenDown => (format!("{bet} — {amount} taken down"), t.ink),
         K::Traveled { to } => (format!("{bet} — travels to {to}"), t.ink2),
-        K::Rejected { reason } => (format!("{bet} — refused: {}", reason.label()), t.amber),
+        // The verb and the figure, because "refused: bankroll won't cover
+        // it" beside a full bankroll is a zero-stake bet from a counter that
+        // never got its starting value, and a refusal on a place bet could
+        // otherwise have been any of four things from any of six rules.
+        K::Rejected { reason, what } => (
+            if e.event.stake_cents > 0 {
+                format!(
+                    "{bet} — {} {amount} refused: {}",
+                    what.label(),
+                    reason.label()
+                )
+            } else {
+                format!("{bet} — {} refused: {}", what.label(), reason.label())
+            },
+            t.amber,
+        ),
         K::ClippedToMax => (
             format!("{bet} — clipped to the table max, {amount}"),
             t.amber,

@@ -21,7 +21,7 @@ use crate::bets::{
 };
 use crate::game::Session;
 use crate::strategy::view::Features;
-use crate::trace::{BetEventKind, BetKind, RollObserver};
+use crate::trace::{Attempted, BetEventKind, BetKind, RollObserver};
 
 /// Which bet an action concerns. Numbers ride along where a bet lives on a
 /// box number, exactly as in [`BetKind`].
@@ -206,19 +206,20 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
             // Odds already top up toward a target, which is the same thing.
             return self.apply_bet(bet, amount);
         }
+        let asked = asked_cents(amount);
         let spec = match self.flat_spec(bet) {
             Ok(s) => s,
-            Err(r) => return self.reject(bet, r),
+            Err(r) => return self.reject_asking(bet, Attempted::Press, asked, r),
         };
         let cur = *self.slot(spec.slot);
         if cur == 0 {
-            return self.reject(bet, RejectReason::NothingThere);
+            return self.reject_asking(bet, Attempted::Press, asked, RejectReason::NothingThere);
         }
         let want = match amount {
             Amount::Pressed => self.pressed_stake(bet, spec.base),
             other => match self.resolve_amount(bet, other, spec.base) {
                 Ok(v) => v,
-                Err(r) => return self.reject(bet, r),
+                Err(r) => return self.reject_asking(bet, Attempted::Press, asked, r),
             },
         };
         // A stake below the table's own minimum for this bet is not a stake;
@@ -244,7 +245,12 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                     self.emit(bet_kind(bet), BetEventKind::Placed, a);
                     Ok(a)
                 }
-                None => self.reject(bet, RejectReason::InsufficientBankroll),
+                None => self.reject_asking(
+                    bet,
+                    Attempted::Press,
+                    want - cur,
+                    RejectReason::InsufficientBankroll,
+                ),
             }
         } else if want < cur {
             let back = cur - want;
@@ -266,15 +272,15 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
             return self.take_down_odds(bet);
         }
         if matches!(bet, BetRef::Pass | BetRef::Come) && self.point.is_some() {
-            return self.reject(bet, RejectReason::ContractBet);
+            return self.reject_asking(bet, Attempted::Down, 0, RejectReason::ContractBet);
         }
         let spec = match self.flat_spec(bet) {
             Ok(s) => s,
-            Err(r) => return self.reject(bet, r),
+            Err(r) => return self.reject_asking(bet, Attempted::Down, 0, r),
         };
         let cur = *self.slot(spec.slot);
         if cur == 0 {
-            return self.reject(bet, RejectReason::NothingThere);
+            return self.reject_asking(bet, Attempted::Down, 0, RejectReason::NothingThere);
         }
         *self.slot_mut(spec.slot) = 0;
         self.cash += cur;
@@ -301,7 +307,7 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
         };
         let _ = win;
         if cur == 0 {
-            return self.reject(bet, RejectReason::NothingThere);
+            return self.reject_asking(bet, Attempted::Down, 0, RejectReason::NothingThere);
         }
         match bet {
             BetRef::PassOdds => self.pass_odds = 0,
@@ -338,16 +344,16 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                     self.place_working[i] = on;
                     Ok(0)
                 }
-                None => self.reject(bet, RejectReason::NotAllowedNow),
+                None => self.reject_asking(bet, Attempted::Working, 0, RejectReason::NotAllowedNow),
             },
             BetRef::Hardway(n) => match hard_index(n) {
                 Some(i) => {
                     self.hard_working[i] = on;
                     Ok(0)
                 }
-                None => self.reject(bet, RejectReason::NotAllowedNow),
+                None => self.reject_asking(bet, Attempted::Working, 0, RejectReason::NotAllowedNow),
             },
-            _ => self.reject(bet, RejectReason::NotAllowedNow),
+            _ => self.reject_asking(bet, Attempted::Working, 0, RejectReason::NotAllowedNow),
         }
     }
 
@@ -379,16 +385,17 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
 
     #[inline]
     fn place_bet(&mut self, bet: BetRef, amount: Amount, shape: bool) -> Adjudication {
+        let asked = asked_cents(amount);
         if is_odds(bet) {
             return if self.odds_flat_is_up(bet) {
                 self.apply_odds(bet, amount)
             } else {
-                self.reject(bet, RejectReason::NotAllowedNow)
+                self.reject_asking(bet, Attempted::Bet, asked, RejectReason::NotAllowedNow)
             };
         }
         let spec = match self.flat_spec(bet) {
             Ok(s) => s,
-            Err(r) => return self.reject(bet, r),
+            Err(r) => return self.reject_asking(bet, Attempted::Bet, asked, r),
         };
         if *self.slot(spec.slot) != 0 {
             return Ok(0); // already up; `Bet` is idempotent
@@ -397,7 +404,7 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
             Amount::Pressed => self.pressed_stake(bet, spec.base),
             other => match self.resolve_amount(bet, other, spec.base) {
                 Ok(v) => v,
-                Err(r) => return self.reject(bet, r),
+                Err(r) => return self.reject_asking(bet, Attempted::Bet, asked, r),
             },
         };
         // Only a figure the rule named itself is shaped here. `base` and
@@ -422,7 +429,12 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                 self.emit(bet_kind(bet), BetEventKind::Placed, a);
                 Ok(a)
             }
-            None => self.reject(bet, RejectReason::InsufficientBankroll),
+            None => self.reject_asking(
+                bet,
+                Attempted::Bet,
+                want,
+                RejectReason::InsufficientBankroll,
+            ),
         }
     }
 
@@ -542,7 +554,12 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                         self.emit(BetKind::PassOdds, BetEventKind::Placed, a);
                         Ok(a)
                     }
-                    None => self.reject(bet, RejectReason::InsufficientBankroll),
+                    None => self.reject_asking(
+                        bet,
+                        Attempted::Bet,
+                        target,
+                        RejectReason::InsufficientBankroll,
+                    ),
                 }
             }
             BetRef::DontPassLay => {
@@ -562,7 +579,12 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                         self.emit(BetKind::DontPassLay, BetEventKind::Placed, a);
                         Ok(a)
                     }
-                    None => self.reject(bet, RejectReason::InsufficientBankroll),
+                    None => self.reject_asking(
+                        bet,
+                        Attempted::Bet,
+                        stake,
+                        RejectReason::InsufficientBankroll,
+                    ),
                 }
             }
             BetRef::ComeOdds(num) => {
@@ -580,7 +602,12 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                         self.emit(BetKind::ComeOdds(num), BetEventKind::Placed, a);
                         Ok(a)
                     }
-                    None => self.reject(bet, RejectReason::InsufficientBankroll),
+                    None => self.reject_asking(
+                        bet,
+                        Attempted::Bet,
+                        target,
+                        RejectReason::InsufficientBankroll,
+                    ),
                 }
             }
             BetRef::DontComeLay(num) => {
@@ -600,7 +627,12 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                         self.emit(BetKind::DontComeLay(num), BetEventKind::Placed, a);
                         Ok(a)
                     }
-                    None => self.reject(bet, RejectReason::InsufficientBankroll),
+                    None => self.reject_asking(
+                        bet,
+                        Attempted::Bet,
+                        stake,
+                        RejectReason::InsufficientBankroll,
+                    ),
                 }
             }
             _ => unreachable!("not an odds bet"),
@@ -779,10 +811,44 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
         st.stake = stake;
     }
 
+    /// Refuse, and say what was being attempted and for how much.
+    ///
+    /// `asked` is the stake the strategy wanted, not the zero it ended up
+    /// with — a refusal that reports nothing costs the reader the one number
+    /// that would have told them which rule they are looking at.
+    #[inline]
+    pub(crate) fn reject_asking(
+        &mut self,
+        bet: BetRef,
+        what: Attempted,
+        asked: i64,
+        reason: RejectReason,
+    ) -> Adjudication {
+        self.emit(
+            bet_kind(bet),
+            BetEventKind::Rejected { reason, what },
+            asked,
+        );
+        Err(reason)
+    }
+
     #[inline]
     pub(crate) fn reject(&mut self, bet: BetRef, reason: RejectReason) -> Adjudication {
-        self.emit(bet_kind(bet), BetEventKind::Rejected { reason }, 0);
-        Err(reason)
+        self.reject_asking(bet, Attempted::Bet, 0, reason)
+    }
+}
+
+/// What an amount asked for in cents, where that is a number at all.
+///
+/// `base`, `pressed` and `max` are answered by the table, so there is no
+/// figure to report back until it has answered — but a named one belongs in
+/// the refusal, because "bankroll won't cover it" beside a full bankroll is
+/// how a zero-stake bet from an uninitialized counter reads.
+#[inline]
+const fn asked_cents(amount: Amount) -> i64 {
+    match amount {
+        Amount::Cents(c) => c,
+        _ => 0,
     }
 }
 
@@ -857,10 +923,46 @@ mod tests {
             .events
             .iter()
             .filter_map(|e| match e.kind {
-                BetEventKind::Rejected { reason } => Some(reason),
+                BetEventKind::Rejected { reason, .. } => Some(reason),
                 _ => None,
             })
             .collect()
+    }
+
+    /// A refusal says what was attempted and for how much.
+    ///
+    /// Without both, a ledger could only report that *something* about a bet
+    /// was refused: a place bet refusal could have been the bet, a press, a
+    /// take-down or a working toggle, and every one of them reported a stake
+    /// of zero — so a $0 bet from a counter that never got its starting
+    /// value read as "bankroll won't cover it" beside a full bankroll.
+    #[test]
+    fn a_refusal_names_the_action_and_the_amount() {
+        let (sel, r) = (BetSelection::default(), rules(OddsPolicy::None));
+        let mut t = table(&sel, &r, 100_000);
+        let _ = t.apply(Action::Bet(BetRef::Pass, Amount::Cents(12)));
+        t.point = Some(4);
+        let _ = t.apply(Action::SetStake(BetRef::Place(6), Amount::Cents(5000)));
+        let _ = t.apply(Action::Down(BetRef::Place(8)));
+        let _ = t.apply(Action::Working(BetRef::Field, false));
+        let seen: Vec<(Attempted, RejectReason, i64)> = t
+            .obs
+            .events
+            .iter()
+            .filter_map(|e| match e.kind {
+                BetEventKind::Rejected { reason, what } => Some((what, reason, e.stake_cents)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                (Attempted::Bet, RejectReason::BelowTableMinimum, 12),
+                (Attempted::Press, RejectReason::NothingThere, 5000),
+                (Attempted::Down, RejectReason::NothingThere, 0),
+                (Attempted::Working, RejectReason::NotAllowedNow, 0),
+            ]
+        );
     }
 
     #[test]

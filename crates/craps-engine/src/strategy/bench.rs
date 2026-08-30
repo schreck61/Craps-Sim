@@ -328,7 +328,8 @@ mod tests {
                     matches!(
                         e.event.kind,
                         BetEventKind::Rejected {
-                            reason: crate::strategy::RejectReason::WrongDirection
+                            reason: crate::strategy::RejectReason::WrongDirection,
+                            ..
                         }
                     )
                 })
@@ -566,7 +567,7 @@ mod tests {
         assert!(!refusals.is_empty(), "the refusals never surfaced");
         let (_, first) = refusals[0];
         assert_eq!(first.rule, Some(1), "and the refusal names who asked");
-        let BetEventKind::Rejected { reason } = first.event.kind else {
+        let BetEventKind::Rejected { reason, .. } = first.event.kind else {
             panic!("not a refusal")
         };
         assert_eq!(reason.label(), "odds policy allows none");
