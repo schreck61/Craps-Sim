@@ -547,6 +547,27 @@ pub fn flat_handle_per_roll_cents(sel: &BetSelection, rules: &Rules, table_min_c
 
 #[cfg(test)]
 mod tests {
+    /// The four hardways are two bets, not one. 4 and 10 pay 7:1 against
+    /// 8:1 true; 6 and 8 pay 9:1 against 10:1. Anything that shows a single
+    /// figure for all four is understating one pair by two points.
+    #[test]
+    fn the_hardways_are_two_different_bets() {
+        let r = Rules {
+            odds_policy: OddsPolicy::None,
+            field_12_triple: false,
+            come_odds_work_on_comeout: false,
+            prop_bet_cents: 500,
+            table_max_mult: 1000,
+        };
+        let outside = bet_edge(EdgeBet::Hardway(4), &r).as_f64();
+        let inside = bet_edge(EdgeBet::Hardway(6), &r).as_f64();
+        assert_eq!(bet_edge(EdgeBet::Hardway(10), &r).as_f64(), outside);
+        assert_eq!(bet_edge(EdgeBet::Hardway(8), &r).as_f64(), inside);
+        assert!((outside - -1.0 / 9.0).abs() < 1e-12, "hard 4/10 is -1/9");
+        assert!((inside - -1.0 / 11.0).abs() < 1e-12, "hard 6/8 is -1/11");
+        assert!(outside < inside, "the outside hardways cost more");
+    }
+
     use super::*;
     use crate::bets::{OddsPolicy, Progression};
     use crate::game::Session;

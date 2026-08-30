@@ -6,9 +6,7 @@
 //! strip) and a right column for bankroll, table, house rules, and the
 //! Engine disclosure. Order-ticket validation runs live in the footer.
 
-use craps_engine::{
-    bet_edge, blended_edge, EdgeBet, OddsPolicy, Progression, HARD_NUMS, PLACE_NUMS,
-};
+use craps_engine::{bet_edge, blended_edge, EdgeBet, OddsPolicy, Progression, PLACE_NUMS};
 use egui::{Align2, Color32, FontId, RichText, Sense, Stroke};
 
 use crate::app::App;
@@ -237,12 +235,25 @@ fn bet_rail(app: &mut App, ui: &mut egui::Ui, focus: Option<FragmentId>) {
     });
     ui.add_space(4.0);
     ui.label("Hardways:");
-    ui.horizontal_wrapped(|ui| {
-        for (i, &n) in HARD_NUMS.iter().enumerate() {
-            ui.checkbox(&mut sel.hardways[i], format!("Hard {n}"));
-        }
-        edge_tick(ui, &t, bet_edge(EdgeBet::Hardway(6), &rules).as_f64());
-    });
+    // Two lines, because they are two bets. Hard 4 and 10 pay 7:1 against
+    // 8:1 true; hard 6 and 8 pay 9:1 against 10:1. One tick for all four
+    // printed the 6/8 figure beside the 4 and the 10, which is a quarter of
+    // the cost understated — and Principle 2 of the GUI spec says the cost
+    // of every checkbox is drawn at the moment of choice, not the cost of
+    // the cheapest checkbox nearby.
+    for group in [[4u8, 10], [6, 8]] {
+        ui.horizontal_wrapped(|ui| {
+            for n in group {
+                let i = craps_engine::hard_index(n).expect("hardway number");
+                ui.checkbox(&mut sel.hardways[i], format!("Hard {n}"));
+            }
+            edge_tick(
+                ui,
+                &t,
+                bet_edge(EdgeBet::Hardway(group[0]), &rules).as_f64(),
+            );
+        });
+    }
     ui.add_space(4.0);
     ui.label("One-roll props (every roll):");
     ui.horizontal(|ui| {
