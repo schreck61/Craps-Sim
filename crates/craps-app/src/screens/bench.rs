@@ -183,11 +183,34 @@ pub fn authoring(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(6.0);
     library_row(app, ui);
     ui.add_space(6.0);
-    source_box(app, ui);
-    ui.add_space(6.0);
     controls(app, ui);
     ui.add_space(6.0);
     status(app, ui);
+    ui.add_space(10.0);
+
+    // The rows are the first editor; the text is the second. Both edit the
+    // same tree, which is what keeps them from being two languages.
+    super::rules::show(app, ui);
+
+    ui.add_space(10.0);
+    egui::CollapsingHeader::new(
+        RichText::new("As text")
+            .font(FontId::new(type_scale::BODY, theme::sans()))
+            .color(t.ink2),
+    )
+    .id_salt("bench_as_text")
+    .default_open(false)
+    .show(ui, |ui| {
+        source_box(app, ui);
+        ui.label(
+            RichText::new(
+                "Paste a strategy here, or edit anything the rows above \
+                 leave as text. Press Compile when you are done.",
+            )
+            .font(FontId::new(type_scale::CAPTION, theme::sans()))
+            .color(t.ink2),
+        );
+    });
 }
 
 fn library_row(app: &mut App, ui: &mut egui::Ui) {

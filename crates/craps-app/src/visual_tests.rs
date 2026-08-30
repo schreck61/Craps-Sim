@@ -262,3 +262,22 @@ fn visual_bench() {
     settle(&mut harness, 4);
     harness.snapshot("10-bench");
 }
+
+/// The rule editor: a strategy as rows of typed slots, on Design's Rules
+/// tab. Its own shot because it is the surface P5 exists to add.
+#[test]
+#[ignore] // GPU-dependent: pinned-backend CI job + local generation only.
+fn visual_rules_editor() {
+    let mut harness = Harness::builder()
+        .with_size(vec2(1440.0, 900.0))
+        .build_eframe(|cc| {
+            let mut app = App::new(cc);
+            app.seed = 0x5EED_CAFE_F00D_0001;
+            app.bench.source = craps_engine::strategy::EXAMPLES[0].1.to_owned();
+            app.bench.build();
+            app.use_strategy = true;
+            app
+        });
+    settle(&mut harness, 3);
+    harness.snapshot("11-rules");
+}

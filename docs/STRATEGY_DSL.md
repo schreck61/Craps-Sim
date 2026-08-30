@@ -2,7 +2,7 @@
 
 ## Craps-Sim Strategy Language — Design Specification & Implementation Plan
 
-**Status:** In progress against v0.5. P0–P4 have landed; §3, §5.2, §6 and
+**Status:** In progress against v0.5. P0–P6 have landed; §3, §5.2, §6 and
 Part II §3 have been corrected against what building them taught, with the
 original claim left visible above each correction.
 
@@ -831,9 +831,27 @@ Scenario Sentence does not yet carry a strategy's name and hash. That
 touches the sentence codec and its round-trip law, and belongs with the
 provenance story rather than riding along with a file store.
 
-**P5 — The rule editor (10.0 dd).** Typed-slot rows, prose rendering,
-drag-reorder, the static checks of §9 wired into the existing order-ticket
-validation strip. The expensive item, and the cut line (risk 2).
+**P5 — The rule editor (10.0 dd). Done.** Typed-slot rows on Design's Rules
+tab: a trigger from a closed list, conditions as `<read> <comparison>
+<value>` clauses joined by "and", and actions as verb-bet-amount. Money
+reads ask for dollars and counts ask for counts. Nothing here writes or
+parses text — the rows edit the tree, the tree renders to text, and the
+round-trip law is what keeps the two editors from becoming two languages.
+Rules reorder and delete; each carries its fire count from the last night
+stepped in Replay, which is where a dead rule announces itself. §9's checks
+join the order-ticket strip that already answers the same question of the
+bet rail.
+
+**Principle 2, narrowed against what building it taught.** The claim was
+that anything the text expresses, the rows can render *and edit*. Rendering
+holds: every rule shows. Editing does not, and should not. A condition
+outside the clause shapes — an `or`, nested arithmetic — is displayed as its
+own text with the row saying to edit it there, and a computed amount like
+`stake(place 6) * 2` the same. Slots for arbitrary expression trees would be
+a worse editor than the line of prose they replaced, and building one would
+be the interface describing the AST rather than the game. The half of the
+principle that is load-bearing — that neither editor can say something the
+other cannot hold — is unchanged and tested.
 
 **P6 — Library and provenance (4.0 dd).** The strategy directory, content
 hashing, sentence-by-reference, STALE-on-hash-mismatch, missing-strategy state.

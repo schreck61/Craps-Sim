@@ -9,6 +9,7 @@ pub mod duel;
 pub mod explorer;
 pub mod findings;
 pub mod replay;
+pub mod rules;
 
 use egui::{FontId, RichText};
 

@@ -751,6 +751,55 @@ fn order_ticket(app: &mut App, ui: &mut egui::Ui) {
         .corner_radius(6)
         .inner_margin(10.0)
         .show(ui, |ui| {
+            // A strategy's own diagnostics belong in the same strip as the
+            // bet rail's, because they answer the same question: is this
+            // configuration something the app can honestly run?
+            if app.use_strategy {
+                if let Some(e) = &app.bench.error {
+                    ui.label(
+                        RichText::new(format!("Run is disabled: {e}"))
+                            .font(FontId::new(type_scale::BODY, theme::sans()))
+                            .color(t.ink),
+                    );
+                } else if let Some(p) = &app.bench.program {
+                    let mut notes: Vec<String> = Vec::new();
+                    if let Some(b) = &app.replay.bench {
+                        let dead = b.never_fired();
+                        if !dead.is_empty() {
+                            notes.push(format!(
+                                "{} rule{} never fired on the night in Replay",
+                                dead.len(),
+                                if dead.len() == 1 { "" } else { "s" }
+                            ));
+                        }
+                        let refusals = b.refusals().len();
+                        if refusals > 0 {
+                            notes.push(format!(
+                                "{refusals} refusal{} that night",
+                                if refusals == 1 { "" } else { "s" }
+                            ));
+                        }
+                    }
+                    let worst: i64 = app
+                        .cfg
+                        .table_mins_cents
+                        .first()
+                        .map(|&m| p.cheapest_stake(&app.cfg.rules(), m))
+                        .unwrap_or(0);
+                    ui.label(
+                        RichText::new(format!(
+                            "{} rules · cheapest bet {}{}{}",
+                            p.rule_count(),
+                            numerals::money_text(worst, false),
+                            if notes.is_empty() { "" } else { " · " },
+                            notes.join(" · ")
+                        ))
+                        .font(FontId::new(type_scale::CAPTION, theme::mono()))
+                        .color(t.ink2),
+                    );
+                }
+                return;
+            }
             match app.cfg.validate() {
                 Err(e) => {
                     // Red is reserved for ruin and loss (spec §1, Principle
