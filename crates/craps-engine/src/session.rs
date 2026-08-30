@@ -1057,7 +1057,7 @@ mod bench {
             );
         }
         println!("\nworst ratio {worst:.2}x (tripwire: 4.5x)");
-        println!("worst at ten rules or fewer {worst_small:.2}x (tripwire: 2.5x)");
+        println!("worst at ten rules or fewer {worst_small:.2}x (tripwire: 3.0x)");
         // A regression tripwire, not a target, set with headroom on
         // purpose: cost scales with rule count at roughly 5 ns per rule per
         // roll, the loaded configurations carry 29 rules and sit at 3.9x,
@@ -1068,15 +1068,29 @@ mod bench {
             worst <= 4.5,
             "compiled strategies cost {worst:.2}x the built-in player; the tripwire is 4.5x"
         );
-        // 2.5x, not the 2x the spec once wrote: the 3-point molly is nine
-        // rules and has measured 2.16x-2.19x since it was first benchmarked,
-        // so the ≤2x half of that budget was never true of the numbers
-        // printed beside it. Corrected in STRATEGY_DSL.md Part II §3 rather
-        // than quietly left as a gate nobody ran.
+        // 3.0x, and the number is about hardware rather than about the
+        // interpreter.
+        //
+        // The ratio is not machine-invariant, which is the thing to know
+        // here. The same binary reads 2.14x on the development machine and
+        // 2.57x on a CI runner: the runner is about 1.6x slower in absolute
+        // terms, and the interpreted side — a walk over a flat instruction
+        // stream — loses more to a weaker cache and branch predictor than
+        // the hand-written player's straight line does. Both tripwires are
+        // therefore set against the slowest hardware this has been measured
+        // on, with the same headroom over it (CI reads 2.57x and 3.85x).
+        //
+        // This was 2.5x, calibrated on one machine, and it failed the first
+        // time it ran anywhere else — which is what running it was for. It
+        // is not loosened because the code got slower: a paired A/B against
+        // the revision before this work has the compiled player 9% *faster*
+        // on the loaded configurations and about 1% slower on the small
+        // ones. Do not re-tighten to a local reading without checking what
+        // CI sees, or main goes red on a machine rather than on a change.
         assert!(
-            worst_small <= 2.5,
+            worst_small <= 3.0,
             "a strategy of ten rules or fewer costs {worst_small:.2}x the built-in player; \
-             the tripwire is 2.5x"
+             the tripwire is 3.0x"
         );
     }
 

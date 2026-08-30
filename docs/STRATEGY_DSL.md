@@ -1315,7 +1315,26 @@ and after the work of this revision, as it has since it was first
 benchmarked. A budget its own table contradicts is worse than no budget,
 because it reads as a gate somebody is holding.
 
-**The budget is ≤ 2.5× at ten rules or fewer, and ≤ 4.5× across the felt.**
+**The ratio is not machine-invariant, and that decides the numbers.** The
+same binary reads 2.14× on the development machine and 2.57× on a CI runner
+that is about 1.6× slower in absolute terms. The interpreted side — a walk
+over a flat instruction stream — loses more to a weaker cache and branch
+predictor than the hand-written player's straight line does, so the *gap*
+widens on slower hardware even though nothing about the code changed. The
+loaded configurations move the same way: 3.64× here, 3.85× there.
+
+This was found the only way it could be, by running the gate somewhere other
+than where it was calibrated. It had been set at ≤ 2.5× from one machine's
+reading and failed on the first CI run after it was wired up — not because
+anything had regressed, but because a threshold calibrated on one processor
+is a statement about that processor.
+
+**The budget is ≤ 3.0× at ten rules or fewer, and ≤ 4.5× across the felt**,
+both set against the slowest hardware this has been measured on with the same
+headroom over it.
+
+*Previously, and wrong in two different ways:* ≤ 2× (never true of the table
+printed above it) and then ≤ 2.5× (true only here).
 Both halves are asserted by `bench_compiled` — the small-strategy half was
 never asserted at all until this revision — and both now run in CI (§5). They
 are regression tripwires across the four benchmark configurations rather than
