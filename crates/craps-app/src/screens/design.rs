@@ -222,17 +222,23 @@ fn bet_rail(app: &mut App, ui: &mut egui::Ui, focus: Option<FragmentId>) {
 
     ui.add_space(4.0);
     ui.label("Place bets:");
-    ui.horizontal_wrapped(|ui| {
-        for (i, &n) in PLACE_NUMS.iter().enumerate() {
-            ui.checkbox(&mut sel.place[i], format!("{n}"));
-        }
-        edge_tick(ui, &t, bet_edge(EdgeBet::Place(6), &rules).as_f64());
-        ui.label(
-            RichText::new("(6/8 · 5/9 and 4/10 cost more)")
-                .font(FontId::new(type_scale::CAPTION, theme::sans()))
-                .color(t.ink2),
-        );
-    });
+    // Three lines, because they are three bets: 4 and 10 pay 9:5, 5 and 9
+    // pay 7:5, 6 and 8 pay 7:6. One tick for all six printed the 6/8 figure
+    // — the cheapest of the three — beside a checkbox that costs four times
+    // as much. The parenthetical that used to sit here said the others cost
+    // more, which is disclosure but not pricing: the bar next to the 4 was
+    // still drawing the 6's cost.
+    //
+    // Outside to inside, worst to best, matching the hardways below.
+    for group in [[4u8, 10], [5, 9], [6, 8]] {
+        ui.horizontal_wrapped(|ui| {
+            for n in group {
+                let i = craps_engine::place_index(n).expect("place number");
+                ui.checkbox(&mut sel.place[i], format!("{n}"));
+            }
+            edge_tick(ui, &t, bet_edge(EdgeBet::Place(group[0]), &rules).as_f64());
+        });
+    }
     ui.add_space(4.0);
     ui.label("Hardways:");
     // Two lines, because they are two bets. Hard 4 and 10 pay 7:1 against

@@ -547,6 +547,28 @@ pub fn flat_handle_per_roll_cents(sel: &BetSelection, rules: &Rules, table_min_c
 
 #[cfg(test)]
 mod tests {
+    /// The six place numbers are three bets, not one. 4 and 10 pay 9:5,
+    /// 5 and 9 pay 7:5, 6 and 8 pay 7:6 — a four-fold spread in cost behind
+    /// six checkboxes that used to share a single figure.
+    #[test]
+    fn the_place_numbers_are_three_different_bets() {
+        let r = Rules {
+            odds_policy: OddsPolicy::None,
+            field_12_triple: false,
+            come_odds_work_on_comeout: false,
+            prop_bet_cents: 500,
+            table_max_mult: 1000,
+        };
+        let e = |n| bet_edge(EdgeBet::Place(n), &r).as_f64();
+        assert_eq!(e(4), e(10));
+        assert_eq!(e(5), e(9));
+        assert_eq!(e(6), e(8));
+        assert!((e(6) - -1.0 / 66.0).abs() < 1e-12, "6/8 is -1/66");
+        assert!((e(5) - -0.04).abs() < 1e-12, "5/9 is -4%");
+        assert!((e(4) - -1.0 / 15.0).abs() < 1e-12, "4/10 is -1/15");
+        assert!(e(4) < e(5) && e(5) < e(6), "outside costs most, 6/8 least");
+    }
+
     /// The four hardways are two bets, not one. 4 and 10 pay 7:1 against
     /// 8:1 true; 6 and 8 pay 9:1 against 10:1. Anything that shows a single
     /// figure for all four is understating one pair by two points.
