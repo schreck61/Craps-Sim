@@ -38,6 +38,8 @@ pub enum FindingsTab {
 
 pub struct App {
     pub cfg: SimConfig,
+    /// The Bench: one session, stepped (STRATEGY_DSL.md §8).
+    pub bench: crate::screens::bench::BenchState,
     pub table_mins_text: String,
     pub seed: u64,
     pub prefs: Prefs,
@@ -115,6 +117,7 @@ impl App {
             .collect::<Vec<_>>()
             .join(", ");
         Self {
+            bench: Default::default(),
             cfg,
             table_mins_text: mins_text,
             seed: fresh_seed(),

@@ -244,6 +244,9 @@ press half-press for place 6          # per stream; bare `press x` sets all
 on point-established:
     bet place inside 2 units          # $22 inside at a $5 table
 
+on roll when point != 0:
+    bet pass                          # no amount: whatever this stream presses to
+
 on win of place 6:
     set hits = hits + 1
     press place 6 to stake(place 6) * 2
@@ -281,9 +284,22 @@ here rather than quietly:
   exist. `-200` is still a negative literal. This is what lets every bet be
   spelled the way craps spells it without a symbol table in the tokenizer.
 
+**An amount is optional on `bet`**, and leaving it off means whatever that
+stream's pressing calls for — the base stake under a flat progression. `bet
+pass` is how a player says it; making them write `bet pass pressed` at a
+table where nothing presses would be the language describing the engine
+rather than the game.
+
 Groups (`place inside`, `all hardways`) are parse-time sugar: they expand into
 one statement per member and never render back as a group, because the tree
 holds the members and the law is about the tree.
+
+Expressions carry the brackets they need and no others. The first renderer
+parenthesized everything, on the grounds that the tree is the truth and the
+text is only its serialization — and then the Bench put those rules on screen
+and `on roll when ((point != 0) and up(pass)):` turned out to be nothing
+anyone would write. Precedence belongs to the parser already; the renderer
+only has to agree with it, which the round-trip law checks.
 
 The `language 1` header is binding: the parser refuses a version it does not
 know rather than guessing, so a saved strategy never silently changes meaning
@@ -669,8 +685,13 @@ debugging surface for P2 and P3 themselves.
   `BetEventKind::Won` gained `stake_returned`, because a ledger that cannot
   tell a pass-line win from a place-bet win cannot account for the rail, and
   §8 promises exactly that accounting.
-- **P4b — next.** The panel on the Design screen: the stepper, the
-  highlighted rule rows, the ledger in words.
+- **P4b — done.** The panel on the Design screen, collapsed by default: the
+  source, a compile that says where and what in words, one-session run,
+  step transport, numbered rule rows carrying fire counts (lit when they
+  fired on this roll, amber when they never fired at all), and the ledger
+  attributing every cent either to the rule that asked for it or to the
+  table. Its own pixel snapshot, because the panel is collapsed by default
+  and the picture worth having is of it in use.
 
 **P5 — The rule editor (10.0 dd).** Typed-slot rows, prose rendering,
 drag-reorder, the static checks of §9 wired into the existing order-ticket

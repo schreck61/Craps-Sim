@@ -217,3 +217,60 @@ fn visual_all_screens() {
     settle(&mut harness, 4);
     harness.snapshot("09-horizon-light");
 }
+
+/// The Bench, open with a session stepped onto it. Its own snapshot rather
+/// than part of the Design shot, because the panel is collapsed by default
+/// and the point of the picture is what it looks like in use.
+#[test]
+#[ignore] // GPU-dependent: pinned-backend CI job + local generation only.
+fn visual_bench() {
+    let mut harness = Harness::builder()
+        .with_size(vec2(1440.0, 900.0))
+        .build_eframe(|cc| {
+            let mut app = App::new(cc);
+            app.seed = 0x5EED_CAFE_F00D_0001;
+            app.cfg.sel.take_odds = true;
+            app.cfg.sel.set_place(6, true);
+            app.cfg.sel.set_place(8, true);
+            app.bench.open = true;
+            app
+        });
+    settle(&mut harness, 2);
+    {
+        let app = harness.state_mut();
+        // What the "Take the current player" button does, then a run — the
+        // panel is worth looking at full, not empty.
+        let s = craps_engine::strategy::from_selection(&app.cfg.sel, &app.cfg.rules());
+        app.bench.source = craps_engine::strategy::render(&s);
+        app.bench.build();
+        let p = app.bench.program.clone().unwrap();
+        app.bench.trace = Some(craps_engine::strategy::bench_session(
+            &p,
+            &app.cfg.rules(),
+            1000,
+            app.cfg.budget_cents,
+            None,
+            app.cfg.max_rolls,
+            app.cfg.horizon_rolls(),
+            7,
+        ));
+        app.bench.position = 12;
+    }
+    // The Design screen scrolls, and the Bench sits under the bet rail, so
+    // the picture has to be taken where the panel actually is.
+    settle(&mut harness, 2);
+    // The wheel goes where the pointer is; without this it scrolls nothing.
+    harness.event(egui::Event::PointerMoved(egui::pos2(800.0, 500.0)));
+    harness.step();
+    for _ in 0..40 {
+        harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -120.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        });
+        harness.step();
+    }
+    settle(&mut harness, 4);
+    harness.snapshot("10-bench");
+}

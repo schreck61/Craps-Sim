@@ -40,6 +40,30 @@ pub enum BetKind {
     AnyCraps,
 }
 
+impl BetKind {
+    /// How this bet is spoken. One place, so the Replay ledger, the Bench,
+    /// and the editor all call the same bet the same thing.
+    pub fn label(&self) -> String {
+        match self {
+            BetKind::Pass => "pass".into(),
+            BetKind::PassOdds => "odds on pass".into(),
+            BetKind::DontPass => "dont pass".into(),
+            BetKind::DontPassLay => "odds on dont pass".into(),
+            BetKind::Come => "come".into(),
+            BetKind::ComePoint(n) => format!("come {n}"),
+            BetKind::ComeOdds(n) => format!("odds on come {n}"),
+            BetKind::DontCome => "dont come".into(),
+            BetKind::DontComePoint(n) => format!("dont come {n}"),
+            BetKind::DontComeLay(n) => format!("odds on dont come {n}"),
+            BetKind::Place(n) => format!("place {n}"),
+            BetKind::Hardway(n) => format!("hard {n}"),
+            BetKind::Field => "field".into(),
+            BetKind::AnySeven => "any seven".into(),
+            BetKind::AnyCraps => "any craps".into(),
+        }
+    }
+}
+
 /// What happened to a bet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BetEventKind {

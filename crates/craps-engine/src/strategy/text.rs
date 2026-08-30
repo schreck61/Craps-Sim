@@ -560,7 +560,25 @@ impl Parser {
         self.err("expected a value")
     }
 
+    /// Words that can only begin a statement or a rule, and so can never be
+    /// the start of an amount. Seeing one means the bet was written without
+    /// a stake.
+    fn at_statement_boundary(&self) -> bool {
+        const STARTERS: [&str; 8] = [
+            "on", "bet", "press", "regress", "down", "working", "leave", "set",
+        ];
+        self.done() || STARTERS.iter().any(|w| self.peek().eq_ignore_ascii_case(w))
+    }
+
+    /// An amount, or nothing — and nothing means whatever this stream's
+    /// pressing calls for, which under a flat progression is the base
+    /// stake. `bet pass` is how a player says it, and making them write
+    /// `bet pass pressed` on a table where nothing presses would be the
+    /// language describing the engine rather than the game.
     fn amount(&mut self) -> Result<AmountExpr, ParseError> {
+        if self.at_statement_boundary() {
+            return Ok(AmountExpr::Pressed);
+        }
         if self.eat("base") {
             return Ok(AmountExpr::Base);
         }
@@ -858,11 +876,41 @@ fn op_text(o: BinOp) -> &'static str {
     }
 }
 
-/// Expressions render fully parenthesized. The tree is the truth and the
-/// text is its serialization, so the round-trip law matters more than the
-/// prose does — and a reader who wants prose is looking at the rule editor,
-/// which renders from the same tree without any of these brackets.
+/// How tightly an operator binds, so an expression can be written the way a
+/// person would write it instead of drowned in brackets.
+fn prec(o: BinOp) -> u8 {
+    match o {
+        BinOp::Or => 1,
+        BinOp::And => 2,
+        BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::Eq | BinOp::Ne => 3,
+        BinOp::Add | BinOp::Sub => 4,
+        BinOp::Mul | BinOp::Div => 5,
+        // Rendered as calls; they never need brackets of their own.
+        BinOp::Min | BinOp::Max => u8::MAX,
+    }
+}
+
+#[inline]
+fn is_comparison(o: BinOp) -> bool {
+    matches!(
+        o,
+        BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::Eq | BinOp::Ne
+    )
+}
+
+/// Expressions render with the brackets they need and no others.
+///
+/// The first version wrote every operator fully parenthesized on the
+/// grounds that the tree is the truth and the text is its serialization.
+/// Then the Bench put those rules on screen for a person to read, and
+/// `on roll when ((point != 0) and up(pass)):` is not what anyone would
+/// write. Precedence is the parser's already; this only has to agree with
+/// it, and the round-trip law is what checks that it does.
 fn expr_text(e: &Expr, vars: &[String]) -> String {
+    expr_prec(e, vars, 0)
+}
+
+fn expr_prec(e: &Expr, vars: &[String], parent: u8) -> String {
     match e {
         Expr::Const(v) => v.to_string(),
         Expr::Var(i) => vars
@@ -870,20 +918,43 @@ fn expr_text(e: &Expr, vars: &[String]) -> String {
             .cloned()
             .unwrap_or_else(|| format!("var{i}")),
         Expr::Read(r) => read_text(*r),
-        Expr::Not(a) => format!("not {}", expr_text(a, vars)),
-        Expr::Neg(a) => format!("-({})", expr_text(a, vars)),
+        // `not` and unary minus bind tighter than any binary operator, so
+        // an operand that is one needs brackets.
+        Expr::Not(a) => format!("not {}", expr_prec(a, vars, u8::MAX)),
+        // A negated literal keeps its brackets: `-20000` would read back as
+        // a negative constant, which is a different tree from a negation
+        // applied to a positive one, and the law is about the tree.
+        Expr::Neg(a) => match a.as_ref() {
+            Expr::Const(v) => format!("-({v})"),
+            other => format!("-{}", expr_prec(other, vars, u8::MAX)),
+        },
         Expr::Bin(BinOp::Min, a, b) => {
-            format!("min({}, {})", expr_text(a, vars), expr_text(b, vars))
+            format!("min({}, {})", expr_prec(a, vars, 0), expr_prec(b, vars, 0))
         }
         Expr::Bin(BinOp::Max, a, b) => {
-            format!("max({}, {})", expr_text(a, vars), expr_text(b, vars))
+            format!("max({}, {})", expr_prec(a, vars, 0), expr_prec(b, vars, 0))
         }
-        Expr::Bin(o, a, b) => format!(
-            "({} {} {})",
-            expr_text(a, vars),
-            op_text(*o),
-            expr_text(b, vars)
-        ),
+        Expr::Bin(o, a, b) => {
+            let p = prec(*o);
+            // Arithmetic and the connectives are left-associative, so only a
+            // right operand of equal precedence needs bracketing: `a - (b -
+            // c)` is not `a - b - c`. Comparisons are non-associative — the
+            // parser reads at most one per expression — so a comparison on
+            // either side of a comparison needs its own brackets, or
+            // `a < b < c` comes back as something the grammar cannot read.
+            let left = if is_comparison(*o) { p + 1 } else { p };
+            let text = format!(
+                "{} {} {}",
+                expr_prec(a, vars, left),
+                op_text(*o),
+                expr_prec(b, vars, p + 1)
+            );
+            if p < parent {
+                format!("({text})")
+            } else {
+                text
+            }
+        }
     }
 }
 
@@ -893,7 +964,18 @@ fn amount_text(a: &AmountExpr, vars: &[String]) -> String {
         AmountExpr::Pressed => "pressed".into(),
         AmountExpr::MaxOdds => "max".into(),
         AmountExpr::Units(e) => format!("{} units", expr_text(e, vars)),
-        AmountExpr::Cents(e) => format!("{} cents", expr_text(e, vars)),
+        // A bare amount is already cents — the unit this engine has — so
+        // saying so adds a word and no information.
+        AmountExpr::Cents(e) => expr_text(e, vars),
+    }
+}
+
+/// Join a statement's words, dropping an amount that renders to nothing.
+fn join(verb: &str, subject: String, amount: String) -> String {
+    if amount.is_empty() {
+        format!("{verb} {subject}")
+    } else {
+        format!("{verb} {subject} {amount}")
     }
 }
 
@@ -913,9 +995,26 @@ fn trigger_text(t: Trigger) -> String {
 
 fn stmt_text(s: &Stmt, vars: &[String]) -> String {
     match s {
-        Stmt::Bet(b, a) => format!("bet {} {}", bet_text(*b), amount_text(a, vars)),
-        Stmt::Press(b, a) => format!("press {} to {}", bet_text(*b), amount_text(a, vars)),
-        Stmt::Regress(b, a) => format!("regress {} to {}", bet_text(*b), amount_text(a, vars)),
+        // Only `bet` drops the default: `press place 6 to` with nothing
+        // after it is a dangling sentence, whatever the parser makes of it.
+        Stmt::Bet(b, a) => join(
+            "bet",
+            bet_text(*b),
+            match a {
+                AmountExpr::Pressed => String::new(),
+                other => amount_text(other, vars),
+            },
+        ),
+        Stmt::Press(b, a) => join(
+            "press",
+            format!("{} to", bet_text(*b)),
+            amount_text(a, vars),
+        ),
+        Stmt::Regress(b, a) => join(
+            "regress",
+            format!("{} to", bet_text(*b)),
+            amount_text(a, vars),
+        ),
         Stmt::Down(b) => format!("down {}", bet_text(*b)),
         Stmt::Working(b, on) => format!(
             "working {} {}",
@@ -974,6 +1073,33 @@ pub fn render(s: &Strategy) -> String {
         }
     }
     out
+}
+
+/// One rule, on its own, as the Bench and the editor show it.
+///
+/// The whole-strategy [`render`] is the save format; this is the same words
+/// for a single row, so a highlighted rule reads exactly as it was written.
+pub fn render_rule(s: &Strategy, index: usize) -> String {
+    let Some(r) = s.rules.get(index) else {
+        return String::new();
+    };
+    let mut out = format!("on {}", trigger_text(r.trigger));
+    if let Some(g) = &r.guard {
+        out += &format!(" when {}", expr_text(g, &s.vars));
+    }
+    out += ": ";
+    out += &r
+        .body
+        .iter()
+        .map(|st| stmt_text(st, &s.vars))
+        .collect::<Vec<_>>()
+        .join("; ");
+    out
+}
+
+/// A bet's name, as the language spells it.
+pub fn bet_name(b: BetRef) -> String {
+    bet_text(b)
 }
 
 /// The bet that names a stream, for writing per-stream pressing back out.

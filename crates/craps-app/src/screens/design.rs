@@ -58,6 +58,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         order_ticket(app, ui);
         ui.add_space(10.0);
         paste_sentence(app, ui);
+        ui.add_space(10.0);
+        super::bench::show(app, ui);
     });
 }
 

@@ -3,6 +3,7 @@
 
 //! The four modes and their screens.
 
+pub mod bench;
 pub mod design;
 pub mod duel;
 pub mod explorer;

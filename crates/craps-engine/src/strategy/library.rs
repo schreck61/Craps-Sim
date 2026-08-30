@@ -32,6 +32,10 @@ fn and(a: Expr, b: Expr) -> Expr {
     Expr::bin(BinOp::And, a, b)
 }
 
+/// Every flat bet asks for whatever its stream's pressing calls for, which
+/// under a flat progression is the base stake. Saying `Base` here instead
+/// would read more plainly and be a trap: a strategy whose pressing is set
+/// afterwards would keep betting the base and never press at all.
 fn bet(b: BetRef) -> Stmt {
     Stmt::Bet(b, AmountExpr::Pressed)
 }
@@ -47,6 +51,7 @@ fn odds(b: BetRef) -> Stmt {
 /// asking for them and being refused once a roll.
 pub fn from_selection(sel: &BetSelection, rules: &Rules) -> Strategy {
     let takes_odds = sel.take_odds && rules.odds_policy != OddsPolicy::None;
+
     let mut out: Vec<Rule> = Vec::new();
 
     // --- Come-out: line bets only. ---
@@ -141,7 +146,7 @@ pub fn from_selection(sel: &BetSelection, rules: &Rules) -> Strategy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bets::{OddsPolicy, Progression};
+    use crate::bets::OddsPolicy;
     use crate::session::{run_program_session, run_session};
     use crate::strategy::compile;
     use crate::sweep::explore_strategies;
@@ -235,7 +240,7 @@ mod tests {
     #[test]
     fn compiled_matches_builtin_across_every_progression() {
         let r = rules(OddsPolicy::X345);
-        for prog in Progression::ALL {
+        for prog in crate::bets::Progression::ALL {
             for (name, base) in explore_strategies() {
                 let sel = BetSelection {
                     progression: prog,
@@ -281,13 +286,18 @@ mod tests {
         sel.set_place(8, true);
 
         let mixed = from_selection(&sel, &r)
-            .pressing(Progression::Flat)
-            .pressing_stream(crate::strategy::view::S_DONT, Progression::Martingale);
+            .pressing(crate::bets::Progression::Flat)
+            .pressing_stream(
+                crate::strategy::view::S_DONT,
+                crate::bets::Progression::Martingale,
+            );
         let mixed = compile(&mixed).unwrap();
 
-        let all_flat = compile(&from_selection(&sel, &r).pressing(Progression::Flat)).unwrap();
+        let all_flat =
+            compile(&from_selection(&sel, &r).pressing(crate::bets::Progression::Flat)).unwrap();
         let all_mart =
-            compile(&from_selection(&sel, &r).pressing(Progression::Martingale)).unwrap();
+            compile(&from_selection(&sel, &r).pressing(crate::bets::Progression::Martingale))
+                .unwrap();
 
         let run = |p: &crate::strategy::Program| {
             (0..300u64)

@@ -30,5 +30,5 @@ pub use bench::{bench_session, BenchEvent, BenchRoll, BenchTrace};
 pub use compile::{compile, CompileError};
 pub use library::from_selection;
 pub use program::{Decision, Program, StratState};
-pub use text::{parse, render, ParseError, LANGUAGE_VERSION};
+pub use text::{bet_name, parse, render, render_rule, ParseError, LANGUAGE_VERSION};
 pub use view::{AllFeatures, FeatureMask, NoFeatures, TableView};
