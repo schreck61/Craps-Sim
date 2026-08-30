@@ -60,23 +60,18 @@ strategy "Press twice, then collect" language 1
 on come-out:
     bet pass base
 
-on roll when point != 0 and point != 6:
-    bet place 6 base
+for each of 6, 8 as n {
+    on roll when point != 0 and point != n:
+        bet place n base
+}
 
-on roll when point != 0 and point != 8:
-    bet place 8 base
+for each of 6, 8 as n {
+    on win of place n when hits-this-shooter(n) <= 2:
+        press place n to stake(place n) * 2
 
-on win of place 6 when hits-this-shooter(6) <= 2:
-    press place 6 to stake(place 6) * 2
-
-on win of place 6 when hits-this-shooter(6) > 2:
-    regress place 6 to base
-
-on win of place 8 when hits-this-shooter(8) <= 2:
-    press place 8 to stake(place 8) * 2
-
-on win of place 8 when hits-this-shooter(8) > 2:
-    regress place 8 to base
+    on win of place n when hits-this-shooter(n) > 2:
+        regress place n to base
+}
 "#;
 
 /// > *Place bets off after a seven-out until the shooter makes a point.*

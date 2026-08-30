@@ -192,6 +192,14 @@ struct Parser {
     toks: Vec<Token>,
     at: usize,
     vars: Vec<String>,
+    /// Names bound by an enclosing `for each`, innermost last.
+    ///
+    /// A binding is not memory: it is a number the parser substitutes while
+    /// it reads the block, so `for each of 6, 8 as n` produces two rules
+    /// that mention 6 and 8 and nothing that mentions `n`. That keeps the
+    /// tree exactly what it would have been written by hand, which is what
+    /// lets the round-trip law stay a law.
+    bindings: Vec<(String, i64)>,
 }
 
 impl Parser {
@@ -247,11 +255,24 @@ impl Parser {
 
     fn number(&mut self) -> Result<i64, ParseError> {
         let t = self.peek().to_owned();
+        if let Some(v) = self.binding(&t) {
+            self.at += 1;
+            return Ok(v);
+        }
         if let Some(v) = parse_money(&t) {
             self.at += 1;
             return Ok(v);
         }
         self.err("expected a number")
+    }
+
+    /// The innermost binding of this name, if any.
+    fn binding(&self, name: &str) -> Option<i64> {
+        self.bindings
+            .iter()
+            .rev()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| *v)
     }
 }
 
@@ -553,6 +574,10 @@ impl Parser {
             }
         }
         let name = self.peek().to_owned();
+        if let Some(v) = self.binding(&name) {
+            self.at += 1;
+            return Ok(Expr::Const(v));
+        }
         if let Some(i) = self.vars.iter().position(|v| *v == name) {
             self.at += 1;
             return Ok(Expr::Var(i as u16));
@@ -564,8 +589,8 @@ impl Parser {
     /// the start of an amount. Seeing one means the bet was written without
     /// a stake.
     fn at_statement_boundary(&self) -> bool {
-        const STARTERS: [&str; 8] = [
-            "on", "bet", "press", "regress", "down", "working", "leave", "set",
+        const STARTERS: [&str; 10] = [
+            "on", "for", "}", "bet", "press", "regress", "down", "working", "leave", "set",
         ];
         self.done() || STARTERS.iter().any(|w| self.peek().eq_ignore_ascii_case(w))
     }
@@ -630,6 +655,106 @@ impl Parser {
             }
         }
         None
+    }
+
+    /// Rules until the end of input, or until a `}` closes a block.
+    fn rules_until_end(&mut self) -> Result<Vec<Rule>, ParseError> {
+        let mut out = Vec::new();
+        while !self.done() && self.peek() != "}" {
+            if self.peek().eq_ignore_ascii_case("for") {
+                out.extend(self.for_each()?);
+            } else {
+                out.push(self.rule()?);
+            }
+        }
+        Ok(out)
+    }
+
+    fn rule(&mut self) -> Result<Rule, ParseError> {
+        self.expect("on")?;
+        let trigger = self.trigger()?;
+        let guard = if self.eat("when") {
+            Some(self.expr()?)
+        } else {
+            None
+        };
+        self.expect(":")?;
+
+        let mut body = Vec::new();
+        // A body runs until the next rule begins. `on`, `for` and `}` are the
+        // only words that can start one and never start a statement, which is
+        // what keeps the indentation decorative rather than load-bearing.
+        while !self.done()
+            && !self.peek().eq_ignore_ascii_case("on")
+            && !self.peek().eq_ignore_ascii_case("for")
+            && self.peek() != "}"
+        {
+            body.extend(self.stmt()?);
+        }
+        if body.is_empty() {
+            return self.err("a rule with no actions does nothing");
+        }
+        let mut r = Rule::new(trigger, body);
+        r.guard = guard;
+        Ok(r)
+    }
+
+    /// `for each of 4, 5, 6, 8, 9, 10 as n { … }`
+    ///
+    /// Bounded iteration over a list written out in full — the only loop
+    /// this language has, and the reason it still terminates by
+    /// construction. The block is read once per value with `n` bound to it,
+    /// so what comes out is the rules somebody would otherwise have typed
+    /// six times.
+    ///
+    /// It is sugar, and it does not survive rendering: the tree holds the
+    /// expanded rules, the same way a group of bets does, because the tree
+    /// is what the round-trip law is about.
+    fn for_each(&mut self) -> Result<Vec<Rule>, ParseError> {
+        self.expect("for")?;
+        self.expect("each")?;
+        self.expect("of")?;
+        let mut values = vec![self.number()?];
+        while self.eat(",") {
+            values.push(self.number()?);
+        }
+        self.expect("as")?;
+        let name = self.next();
+        if name.is_empty() || parse_money(&name).is_some() {
+            return Err(ParseError {
+                line: self.line(),
+                token: name,
+                what: "expected a name to bind each value to".into(),
+            });
+        }
+        if self.vars.contains(&name) {
+            return Err(ParseError {
+                line: self.line(),
+                token: name,
+                what: "already the name of a memory slot; a binding is a \
+                       number, not memory, so give it its own name"
+                    .into(),
+            });
+        }
+        self.expect("{")?;
+        let body_start = self.at;
+
+        let mut out = Vec::new();
+        for v in values {
+            self.at = body_start;
+            self.bindings.push((name.clone(), v));
+            let rules = self.rules_until_end();
+            self.bindings.pop();
+            out.extend(rules?);
+            if self.peek() != "}" {
+                return self.err("expected \"}\" to close the block");
+            }
+        }
+        self.expect("}")?;
+        if out.is_empty() {
+            return self.err("a block with no rules does nothing");
+        }
+        Ok(out)
     }
 
     fn stmt(&mut self) -> Result<Vec<Stmt>, ParseError> {
@@ -713,6 +838,7 @@ pub fn parse(src: &str) -> Result<Strategy, ParseError> {
         toks: tokenize(src),
         at: 0,
         vars: Vec::new(),
+        bindings: Vec::new(),
     };
 
     p.expect("strategy")?;
@@ -775,27 +901,7 @@ pub fn parse(src: &str) -> Result<Strategy, ParseError> {
         }
     }
 
-    let mut rules = Vec::new();
-    while !p.done() {
-        p.expect("on")?;
-        let trigger = p.trigger()?;
-        let guard = if p.eat("when") { Some(p.expr()?) } else { None };
-        p.expect(":")?;
-
-        let mut body = Vec::new();
-        // A body runs until the next rule begins. `on` is the only word that
-        // can start a rule and never starts a statement, which is what makes
-        // the indentation decorative rather than load-bearing.
-        while !p.done() && !p.peek().eq_ignore_ascii_case("on") {
-            body.extend(p.stmt()?);
-        }
-        if body.is_empty() {
-            return p.err("a rule with no actions does nothing");
-        }
-        let mut r = Rule::new(trigger, body);
-        r.guard = guard;
-        rules.push(r);
-    }
+    let rules = p.rules_until_end()?;
 
     if rules.is_empty() {
         return p.err("a strategy with no rules never bets");
@@ -1236,6 +1342,115 @@ on roll when profit <= -$200 or profit >= $150:
         assert_eq!(s.progressions[0], Progression::Flat, "and nothing else did");
         round_trip(&s);
         compile(&s).expect("and it compiles");
+    }
+
+    /// The loop the specification promised in §4 and never had. Six
+    /// near-identical rules — the shape that made 3-Point Molly nine rules,
+    /// six of which differed only in a number — become one block.
+    #[test]
+    fn a_block_writes_a_rule_once_and_produces_one_per_number() {
+        let s = parse(
+            "strategy \"molly\" language 1\n\
+             on come-out:\n    bet pass\n\
+             on roll when point != 0 and live-come < 2:\n    bet come\n\
+             for each of 4, 5, 6, 8, 9, 10 as n {\n\
+                 on roll when come-point(n):\n    bet odds on come n max\n\
+             }\n",
+        )
+        .unwrap_or_else(|e| panic!("{}", e.message()));
+        assert_eq!(s.rules.len(), 8, "two written plus six expanded");
+
+        // The expansion is exactly what somebody would have typed by hand.
+        let long = parse(
+            "strategy \"molly\" language 1\n\
+             on come-out:\n    bet pass\n\
+             on roll when point != 0 and live-come < 2:\n    bet come\n\
+             on roll when come-point(4):\n    bet odds on come 4 max\n\
+             on roll when come-point(5):\n    bet odds on come 5 max\n\
+             on roll when come-point(6):\n    bet odds on come 6 max\n\
+             on roll when come-point(8):\n    bet odds on come 8 max\n\
+             on roll when come-point(9):\n    bet odds on come 9 max\n\
+             on roll when come-point(10):\n    bet odds on come 10 max\n",
+        )
+        .unwrap();
+        assert_eq!(s, long, "a block is the rules, not a different thing");
+
+        // And it is sugar: it does not survive rendering, so the law holds
+        // over the tree rather than over the spelling.
+        round_trip(&s);
+        assert!(!render(&s).contains("for each"));
+    }
+
+    #[test]
+    fn a_binding_reaches_every_place_a_number_can_go() {
+        let s = parse(
+            "strategy \"b\" language 1\n\
+             for each of 6, 8 as n {\n\
+                 on win of place n when hits-this-shooter(n) <= 2:\n\
+                     press place n to stake(place n) * 2\n\
+                 on total(n):\n    bet hard n\n\
+                 on roll when point != n:\n    bet place n\n\
+             }\n",
+        )
+        .unwrap_or_else(|e| panic!("{}", e.message()));
+        assert_eq!(s.rules.len(), 6);
+        let text = render(&s);
+        for want in [
+            "on win of place 6 when hits-this-shooter(6) <= 2",
+            "press place 6 to stake(place 6) * 2",
+            "on total(8)",
+            "bet hard 8",
+            "on roll when point != 8",
+        ] {
+            assert!(text.contains(want), "missing {want:?} in\n{text}");
+        }
+        round_trip(&s);
+    }
+
+    #[test]
+    fn blocks_nest_and_bindings_shadow_innermost_first() {
+        let s = parse(
+            "strategy \"n\" language 1\n\
+             for each of 6, 8 as a {\n\
+                 for each of 4, 10 as b {\n\
+                     on roll when point != a and point != b:\n    bet place a\n\
+                 }\n\
+             }\n",
+        )
+        .unwrap_or_else(|e| panic!("{}", e.message()));
+        assert_eq!(s.rules.len(), 4, "two outer times two inner");
+        let text = render(&s);
+        assert!(text.contains("point != 6 and point != 4"), "{text}");
+        assert!(text.contains("point != 8 and point != 10"), "{text}");
+    }
+
+    #[test]
+    fn a_malformed_block_is_refused_in_words() {
+        for (src, want) in [
+            (
+                "strategy \"x\" language 1\nfor each of 6, 8 as n {\non roll:\n bet place n\n",
+                "}",
+            ),
+            (
+                "strategy \"x\" language 1\nvar n = 0\nfor each of 6 as n {\non roll:\n bet place n\n}\n",
+                "memory slot",
+            ),
+            (
+                "strategy \"x\" language 1\nfor each of 6 as 7 {\non roll:\n bet pass\n}\n",
+                "bind",
+            ),
+            (
+                "strategy \"x\" language 1\nfor each of 6 as n {\n}\n",
+                "no rules",
+            ),
+        ] {
+            let e = parse(src).unwrap_err();
+            assert!(
+                e.message().contains(want),
+                "expected {want:?}, got: {}",
+                e.message()
+            );
+        }
     }
 
     #[test]

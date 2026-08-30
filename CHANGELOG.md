@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The Explorer ranks your strategy too**, as its own rows beside the
   curated eleven, and the **Duel** will run it against any of them on
   identical dice.
+- **`for each of 4, 5, 6, 8, 9, 10 as n { … }`** — a rule written once and
+  produced per number. 3-Point Molly was nine rules, six of them the same
+  rule with a different number in it; it is four now. Blocks nest, and the
+  binding reaches anywhere a number can go.
 
 ### Fixed
 

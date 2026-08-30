@@ -201,8 +201,19 @@ Bench shows both firing, so the shadowing is seen rather than debugged.
 session start. Fixed count, resolved to slot indices at compile time; there is
 no dynamic namespace.
 
-**Bounded iteration.** `for each of 6, 8 { … }` and `for each place number { … }`
-— iteration over a compile-time-known list, and nothing else (Principle 3).
+**Bounded iteration.** `for each of 4, 5, 6, 8, 9, 10 as n { … }` — over a
+list written out in full, and nothing else (Principle 3). The block is read
+once per value with `n` bound to it, and `n` may stand anywhere a number may:
+`place n`, `hard n`, `odds on come n`, `come-point(n)`, `hits-this-shooter(n)`,
+`total(n)`, or a bare term in an expression. Blocks nest, and an inner binding
+shadows an outer one.
+
+A binding is not memory. It is a number the parser substitutes while reading
+the block, so what comes out is exactly the rules somebody would otherwise
+have typed six times — which is why it does not survive rendering, and why
+the round-trip law is unaffected by it. A name already used for a memory slot
+is refused rather than shadowed, because the two are different things and
+sharing a name would hide that.
 
 ## 5. Two Editors, One AST
 
@@ -384,23 +395,18 @@ strategy "Press twice, then collect" language 1
 on come-out:
     bet pass base
 
-on roll when point != 0 and point != 6:
-    bet place 6 base
+for each of 6, 8 as n {
+    on roll when point != 0 and point != n:
+        bet place n base
+}
 
-on roll when point != 0 and point != 8:
-    bet place 8 base
+for each of 6, 8 as n {
+    on win of place n when hits-this-shooter(n) <= 2:
+        press place n to stake(place n) * 2
 
-on win of place 6 when hits-this-shooter(6) <= 2:
-    press place 6 to stake(place 6) * 2
-
-on win of place 6 when hits-this-shooter(6) > 2:
-    regress place 6 to base
-
-on win of place 8 when hits-this-shooter(8) <= 2:
-    press place 8 to stake(place 8) * 2
-
-on win of place 8 when hits-this-shooter(8) > 2:
-    regress place 8 to base
+    on win of place n when hits-this-shooter(n) > 2:
+        regress place n to base
+}
 ```
 
 **Off until the shooter proves himself**
