@@ -241,21 +241,6 @@ pub fn compile(s: &Strategy) -> Result<Program, CompileError> {
         });
     }
 
-    // A program is placement-only when nothing it consults can change
-    // without a resolution: no derived history, no memory, and no trigger
-    // that asks what the dice showed.
-    let placement_only = features.is_empty()
-        && s.vars.is_empty()
-        && ops
-            .iter()
-            .all(|op| !matches!(op, Op::Rule { trigger, .. } if !matches!(trigger, TriggerTest::Fired(_))));
-    let bets_one_roll = ops.iter().any(|op| {
-        matches!(
-            op,
-            Op::Bet(BetRef::Field | BetRef::AnySeven | BetRef::AnyCraps, _)
-        )
-    });
-
     let hash = hash_program(&s.name, &ops, features, &s.progressions);
     // Slots start where the strategy says they start. Padded to the declared
     // count so the session can seed memory without consulting the AST.
@@ -269,8 +254,6 @@ pub fn compile(s: &Strategy) -> Result<Program, CompileError> {
         vars: s.vars.len() as u16,
         var_init,
         features,
-        placement_only,
-        bets_one_roll,
         progressions: s.progressions,
         hash,
     })
@@ -404,7 +387,26 @@ fn feature_of(r: Read) -> FeatureMask {
         Read::Hits(_) | Read::HitsThisShooter(_) => FeatureMask::HITS,
         Read::Wins(_) | Read::Losses(_) | Read::Streak(_) | Read::Paid(_) => FeatureMask::STREAKS,
         Read::PeakProfit | Read::Drawdown => FeatureMask::PEAK,
-        _ => FeatureMask::NONE,
+        // Exhaustive rather than wildcarded: a read added later must be
+        // asked which accumulator it needs, not quietly answered "none" and
+        // then report a stale zero to a strategy that trusted it.
+        Read::Point
+        | Read::ComeOut
+        | Read::Cash
+        | Read::Wealth
+        | Read::Profit
+        | Read::Handle
+        | Read::BuyIn
+        | Read::TableMin
+        | Read::TableMax
+        | Read::Stake(_)
+        | Read::Up(_)
+        | Read::Working(_)
+        | Read::LiveCome
+        | Read::LiveDontCome
+        | Read::ComePoint(_)
+        | Read::DontComePoint(_)
+        | Read::OnTableFace => FeatureMask::NONE,
     }
 }
 

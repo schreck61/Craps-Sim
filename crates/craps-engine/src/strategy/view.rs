@@ -262,6 +262,12 @@ pub struct TableView<'s> {
     pub(crate) point: Option<u8>,
     pub(crate) cash: i64,
     pub(crate) start_cash: i64,
+    /// The table's own numbers. A strategy that wants to say "half the
+    /// buy-in" or "reset when the next step would not be taken" had to
+    /// hard-code them, which made the sentence true at one table and quietly
+    /// wrong at every other.
+    pub(crate) table_min: i64,
+    pub(crate) table_max: i64,
     pub(crate) handle: i64,
     pub(crate) stakes: Stakes<'s>,
     pub(crate) hist: &'s History,
@@ -277,6 +283,8 @@ pub(crate) struct Stakes<'s> {
     pub dc_flat: i64,
     pub place: &'s [i64; 6],
     pub hard: &'s [i64; 4],
+    pub place_working: &'s [bool; 6],
+    pub hard_working: &'s [bool; 4],
     pub come_points: &'s [i64; 6],
     pub come_odds: &'s [i64; 6],
     pub dc_points: &'s [i64; 6],
@@ -287,6 +295,44 @@ pub(crate) struct Stakes<'s> {
 }
 
 impl TableView<'_> {
+    // --- The table and the night ---
+
+    /// What the player sat down with. A stop-loss written as a fraction of
+    /// the buy-in travels between tables; one written in dollars does not.
+    #[inline]
+    pub fn buy_in(&self) -> i64 {
+        self.start_cash
+    }
+
+    /// Whether a bet is working. Only place bets and hardways can be called
+    /// off; everything else is working whenever it is up, so this answers
+    /// the same question `up` does for them.
+    #[inline]
+    pub fn working(&self, bet: BetRef) -> i64 {
+        let on = match bet {
+            BetRef::Place(n) => crate::place_index(n)
+                .is_some_and(|i| self.stakes.place[i] > 0 && self.stakes.place_working[i]),
+            BetRef::Hardway(n) => crate::hard_index(n)
+                .is_some_and(|i| self.stakes.hard[i] > 0 && self.stakes.hard_working[i]),
+            other => self.up(other),
+        };
+        on as i64
+    }
+
+    /// The table minimum, in cents.
+    #[inline]
+    pub fn table_min(&self) -> i64 {
+        self.table_min
+    }
+
+    /// The table maximum, in cents — the ceiling every progression meets
+    /// eventually, and the one a Martingale has to see coming if it is to
+    /// reset instead of pushing into a bet the table will truncate.
+    #[inline]
+    pub fn table_max(&self) -> i64 {
+        self.table_max
+    }
+
     // --- Dice and point ---
 
     /// The point, or 0 when the game is on a come-out. Zero rather than an

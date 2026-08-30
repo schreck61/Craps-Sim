@@ -814,6 +814,29 @@ fn order_ticket(app: &mut App, ui: &mut egui::Ui) {
                         .font(FontId::new(type_scale::CAPTION, theme::mono()))
                         .color(t.ink2),
                     );
+                    // §9's compile-time checks, in the same strip and the
+                    // same register as the bet rail's own. None of them
+                    // stops a run: a dead rule is legal, and a language that
+                    // refused unsound play could not refute it. They are
+                    // here so nobody is surprised by their own rules.
+                    if let Some(parsed) = &app.bench.parsed {
+                        let mut said = craps_engine::strategy::check(parsed, p);
+                        if let Some(&min) = app.cfg.table_mins_cents.first() {
+                            said.extend(craps_engine::strategy::against_table(
+                                parsed,
+                                &app.cfg.rules(),
+                                min,
+                                app.cfg.budget_cents,
+                            ));
+                        }
+                        for d in said {
+                            ui.label(
+                                RichText::new(d.message())
+                                    .font(FontId::new(type_scale::CAPTION, theme::sans()))
+                                    .color(if d.is_warning() { t.amber } else { t.ink2 }),
+                            );
+                        }
+                    }
                 }
                 return;
             }

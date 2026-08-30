@@ -20,6 +20,7 @@
 pub mod action;
 pub mod ast;
 pub mod bench;
+pub mod check;
 pub mod compile;
 pub mod examples;
 pub mod library;
@@ -31,6 +32,7 @@ pub mod view;
 pub use action::{Action, Adjudication, Amount, BetRef, RejectReason};
 pub use ast::{AmountExpr, BinOp, Block, Expr, Group, Read, Rule, Stmt, Strategy, Trigger, VarId};
 pub use bench::{bench_session, BenchEvent, BenchRoll, BenchTrace};
+pub use check::{against_table, check, Diagnostic};
 pub use compile::{compile, CompileError};
 pub use examples::EXAMPLES;
 pub use library::from_selection;

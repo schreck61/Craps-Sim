@@ -74,8 +74,20 @@ pub enum Read {
     PeakProfit,
     Drawdown,
     Handle,
+    /// What the player sat down with.
+    BuyIn,
+    /// The table's own minimum and maximum, so a strategy can be written in
+    /// terms of the table it is played at rather than the one it was typed
+    /// at.
+    TableMin,
+    TableMax,
     Stake(BetRef),
     Up(BetRef),
+    /// Whether this bet is working — a place bet or hardway that has been
+    /// called off is still the player's money and still on the felt, and a
+    /// strategy that can turn one off could not previously ask whether it
+    /// had.
+    Working(BetRef),
     LiveCome,
     LiveDontCome,
     /// The come flat established on this number, 0 if none.
@@ -211,6 +223,10 @@ pub struct Block {
     /// The name each value was bound to.
     pub name: String,
     pub values: Vec<i64>,
+    /// Further lists walked in step with the first, so a block can say
+    /// something about a pair: `for each of 6, 8 as n with 8, 6 as other`.
+    /// Empty for the ordinary single-binding block.
+    pub partners: Vec<(String, Vec<i64>)>,
     /// The block's own source, verbatim — comments and spacing included,
     /// because reconstructing it from the rules would normalise both away.
     pub body: String,
@@ -286,6 +302,12 @@ pub enum Group {
     Outside,
     AllPlace,
     AllHardways,
+    /// Every bet that can be taken down or called off — the place numbers
+    /// and the hardways. Not the line, which is a contract once the point is
+    /// on, and not the one-roll propositions, which resolve before the
+    /// question could be asked: `down everything` is the sweep a player
+    /// makes when they are leaving, and it sweeps what a dealer would.
+    Everything,
 }
 
 impl Group {
@@ -311,11 +333,24 @@ impl Group {
             BetRef::Hardway(8),
             BetRef::Hardway(10),
         ];
+        const EVERYTHING: [BetRef; 10] = [
+            BetRef::Place(4),
+            BetRef::Place(5),
+            BetRef::Place(6),
+            BetRef::Place(8),
+            BetRef::Place(9),
+            BetRef::Place(10),
+            BetRef::Hardway(4),
+            BetRef::Hardway(6),
+            BetRef::Hardway(8),
+            BetRef::Hardway(10),
+        ];
         match self {
             Group::Inside => &INSIDE,
             Group::Outside => &OUTSIDE,
             Group::AllPlace => &ALL_PLACE,
             Group::AllHardways => &ALL_HARD,
+            Group::Everything => &EVERYTHING,
         }
     }
 }

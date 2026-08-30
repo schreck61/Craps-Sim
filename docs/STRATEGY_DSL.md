@@ -123,27 +123,51 @@ because this is what decides which strategies are expressible:
 | Group | Reads |
 |---|---|
 | Dice & point | `point` (0 = off), `come-out`, `last-total`, `roll`, `rolls-this-shooter`, `shooter` |
-| Money | `cash`, `wealth`, `profit`, `peak-profit`, `drawdown`, `handle` |
-| Layout | `up(bet)`, `stake(bet)`, `live-come`, `live-dont-come`, `come-point(n)`, `dont-come-point(n)`, `on-table-face` |
+| Money | `cash`, `wealth`, `profit`, `peak-profit`, `drawdown`, `handle`, `buy-in` |
+| Table | `table-min`, `table-max` |
+| Layout | `up(bet)`, `stake(bet)`, `working(bet)`, `live-come`, `live-dont-come`, `come-point(n)`, `dont-come-point(n)`, `on-table-face` |
 | History | `hits(n)`, `hits-this-shooter(n)`, `wins(bet)`, `losses(bet)`, `streak(bet)`, `paid(bet)` |
 | Memory | user-declared variables and flags |
 
 *Corrected against the shipped `Read`, which this table was wrong about in
 both directions.*
 
-**It listed `working(bet)`, and there is no such read.** A strategy can turn a
-place bet or a hardway off and back on (§3.3), and cannot then ask whether one
-is on. That asymmetry is the one place in the language where something can be
-written and not read, and it is written down here rather than left to be
-found: a strategy that needs to know what it did has to remember it, with a
-`var` set beside the `working` statement that did it. Closing it is a `Read`
-variant and a field on the view, not a grammar change.
+**It listed `working(bet)`, and for two revisions there was no such read.** A
+strategy could turn a place bet or a hardway off and back on (§3.3) and could
+not then ask whether one was on — the one place in the language where
+something could be written and not read, recorded here rather than left to be
+found by whoever needed it.
+
+*That asymmetry is closed.* `working(bet)` is a `Read` and a method on the
+view, which is exactly the shape the paragraph above predicted the fix would
+take: a variant and a field, not a grammar change. It answers off-or-on for
+the two kinds of bet that can be called off, and for everything else it
+answers what `up(bet)` answers — a bet that cannot be turned off is working
+whenever it is up, and giving the same question two answers depending on which
+bet was asked about would be the language describing its own implementation.
+The standing workaround — remember it in a `var` set beside the `working`
+statement that did it — was advice for a gap that no longer exists, and a
+strategy written that way still works but no longer has to be.
 
 **It stopped short of what the parser accepts.** `come-out`, `come-point(n)`
 and `dont-come-point(n)` exist and are listed above. `come-point(n)` is how a
 rule asks between rolls what `come point on n` (§4) announces at the moment it
 happens — a come flat that is sitting on a box number, rather than one that
 just arrived there.
+
+**And three reads are new, because nothing could say them.** `buy-in` is what
+the player sat down with. `table-min` and `table-max` are the table's own two
+numbers. These matter more than a vocabulary line usually does, because
+without them a whole class of strategy is only accidentally correct: a
+stop-loss written `profit <= -$200`, or a Martingale that stops climbing at a
+figure typed in dollars, is a sentence about *one* table. It is true at the
+minimum it was written at and quietly wrong at every other — and the table
+minimum is an axis the Explorer sweeps, so the same strategy is scored at four
+of them in a single run. Seven of the twelve strategies in the expressiveness
+experiment hard-coded a number that should have been one of these three, and
+nothing said so, because a wrong constant is not a syntax error. Written as
+`profit <= -buy-in / 2`, or `stake(pass) * 2 > table-max`, the strategy travels
+to the table it is played at instead of the one it was typed at.
 
 All values are `i64` cents or counts. **There is no floating-point arithmetic in
 the language** — money is integer cents end to end, as everywhere else in this
@@ -203,6 +227,19 @@ Five differences, each of which is a decision rather than an omission:
   the current stake is refused rather than quietly applied (§3.4). "By X" is
   said as `to stake(place 6) + X`, which the expression grammar already
   reaches.
+
+  *Corrected: `by` is now spelled too.* `press place 6 by $6` and `regress
+  place 8 by 1 unit` parse, and the bullet above is the reason they had to.
+  "Press it" is the sentence a player actually says, and it is a *step* — the
+  dealer is asked for six dollars more, not for a destination of twenty-four.
+  Making the author compute the destination by hand, in cents, with the payout
+  unit worked out first, was the language asking them to do the table's
+  arithmetic. So `by` is parse-time sugar: it becomes `stake(<that bet>) +
+  <step>`, the same destination the long form writes, with `by n units`
+  multiplied out through `table-min` on the way. It does not survive
+  rendering. The tree holds the destination, one press is one shape, and the
+  rule editor never has to learn a second — the same convention as bet groups
+  (§5.2), and for the same reason: the round-trip law is about the tree.
 - **`set` is a statement, not an action.** Memory never goes to the table, so
   it never enters the proposal buffer; it is written inside the decision, at
   the moment the statement runs, which is the semantics §4 now states.
@@ -230,8 +267,11 @@ bet place 6 1800                  # a bare number is cents — the same bet
 bet place inside 2 units          # n table minimums, per member
 bet odds on pass max              # the most the odds policy allows
 press place 6 to $24
+press place 6 by $6                # a step, not a destination
+bet place 5 1 unit                 # the singular parses too
 regress place 6 to base
 down all place
+down everything                    # the place numbers and the hardways
 working place 6 off               # and `working place 6 on`
 leave                             # `leave "enough"` reads the same to the engine
 set hits = hits + 1
@@ -239,10 +279,21 @@ set hits = hits + 1
 
 `BetRef` names a bet or a **group**: `place inside` (5, 6, 8, 9), `place
 outside` (4, 10), `all place`, and `all hardways` (`all hard` reads the same).
-Groups are sugar, expanded at parse time into one statement per member. The
-`everything` group in this section's original list was never built, and would
-have been a bet on every stream at once — a sentence nobody in the experiment
-wanted to write.
+Groups are sugar, expanded at parse time into one statement per member.
+
+*Corrected: `everything` exists, and it is not everything.* This section
+previously recorded the group as promised-but-never-built, on the grounds that
+a bet on every stream at once is a sentence nobody wanted to write. That
+reasoning was right and the conclusion was wrong — the group people wanted was
+never "every bet". `everything` expands to the ten bets that can be taken down
+or called off: the six place numbers and the four hardways. Not the line,
+which is a contract once the point is on; not the come bets, which travel and
+are contracts too; not the one-roll propositions, which resolve before the
+question could be asked. So `down everything` is the sweep a player makes when
+they are leaving, and it sweeps exactly what a dealer would sweep — a group
+whose membership is the answer to a rule of craps rather than a list somebody
+chose. Written any other way it would half-fail on every use, refusing four
+bets (§3.4) to take down six.
 
 Adding a bet type the engine does not yet model (buy, lay, place-to-lose, hop,
 horn) is one `BetKind` variant plus its resolution arm. It is not a grammar
@@ -254,7 +305,7 @@ The table applies an `ActionList` in order and emits an event per action. New,
 in [trace.rs](../crates/craps-engine/src/trace.rs):
 
 ```rust
-BetEventKind::Rejected { reason: RejectReason }
+BetEventKind::Rejected { reason: RejectReason, what: Attempted }
 ```
 
 *Corrected against the shipped enum.* **The original claim** was
@@ -296,9 +347,20 @@ The differences worth stating:
   `bet` is idempotent by design and asking twice is not an error. A bet that
   does not exist at all — `place 7` — is refused by the parser and again by the
   compiler, before any table sees it.
+- **A refusal now says what was refused, and for how much.** The event carries
+  an `Attempted` — betting, pressing, regressing, taking down, turning off or
+  on — beside its reason, and the event's `stake_cents` is the stake that was
+  asked for rather than the zero that moved. Without the verb, a ledger could
+  only report that *something* about a bet was refused: six rules can touch
+  one place number, and "place 6 — there's nothing on that bet" does not say
+  whether a press, a take-down or a working toggle went looking for it.
+  Without the amount, a zero-stake bet from a counter that had not been
+  initialized read as *bankroll won't cover it* beside a full bankroll, which
+  is a true sentence that sends the reader to the wrong page.
 
 Per Principle 4, every rejection surfaces: each of the ten is emitted as a
-`Rejected` event and reads in the Bench in the words of the table above.
+`Rejected` event and reads in the Bench in the words of the table above,
+with the verb and the stake the rule asked for.
 
 ### 3.5 What the table will take, and when
 
@@ -443,6 +505,25 @@ have typed six times. A name already used for a memory slot is refused rather
 than shadowed, because the two are different things and sharing a name would
 hide that.
 
+**Several lists may be walked in step.** `for each of 6, 8 as n with 8, 6 as
+other { … }` reads the block twice, with `n` and `other` bound together — 6
+and 8, then 8 and 6. This is what a pair of numbers needs in order to say
+something about each other, and it is the commonest thing in the game: the 6
+and the 8 are partners in half the strategies anybody writes, and *"when this
+one wins, take the other one down"* had no way to be said. A single-list block
+can bind `n` but not `n`'s partner, so that sentence was written out per
+number — four lines becoming twelve rules, each with a box number typed by
+hand and each a chance to type the wrong one. Any number of lists may be
+joined with `with`; the first one's length decides how many iterations there
+are.
+
+Two things it refuses. **Lists walked together must be the same length** — a
+short list would have to be either an error or a silent stop partway through
+the long one, and the second is the kind of quiet wrongness Principle 4 exists
+to forbid. **A name may not be bound twice in one block**, because `with 8, 6
+as n` beside `of 6, 8 as n` is a sentence with no reading: one of the two
+bindings would have to win, and neither is the obvious winner.
+
 **The block survives, and stops surviving honestly.** A strategy records the
 block beside the rules it produced — its name, its values, and its own text
 verbatim, comments and spacing included. Whether it is *still* a block is
@@ -569,9 +650,19 @@ pass` is how a player says it; making them write `bet pass pressed` at a
 table where nothing presses would be the language describing the engine
 rather than the game.
 
-Groups (`place inside`, `all hardways`) are parse-time sugar: they expand into
-one statement per member and never render back as a group, because the tree
-holds the members and the law is about the tree.
+**`2 units` and `1 unit` are both how a person writes it**, and the singular
+now parses. It used to fall through to the cents rule and then choke on the
+word — an error message about a token, on the most natural way there is to
+write the smallest bet the table takes.
+
+Groups (`place inside`, `all hardways`, `everything`) are parse-time sugar:
+they expand into one statement per member and never render back as a group,
+because the tree holds the members and the law is about the tree. `press <bet>
+by <amount>` (§3.3) is sugar under the same rule and renders the same way —
+back out as the `to` destination it desugared to, because that is what the tree
+holds. Both are cases of one principle: the text form may offer two ways to
+say a thing, and the tree may hold only one, or the round-trip law and the
+rule editor would each have two shapes to reconcile.
 
 Expressions carry the brackets they need and no others. The first renderer
 parenthesized everything, on the grounds that the tree is the truth and the
@@ -580,9 +671,24 @@ and `on roll when ((point != 0) and up(pass)):` turned out to be nothing
 anyone would write. Precedence belongs to the parser already; the renderer
 only has to agree with it, which the round-trip law checks.
 
-The `language 1` header is binding: the parser refuses a version it does not
-know rather than guessing, so a saved strategy never silently changes meaning
-under a grammar revision.
+**The `language 1` header is binding, and it refuses in one direction only.**
+A version *newer* than this engine knows is refused: a file written against a
+grammar with words in it that are not here would be misread rather than
+rejected, and misreading is the one failure a save format may not have. A
+version *older* is read.
+
+The first gate did both, and doing both was wrong. Every grammar change so far
+has been additive — a trigger, a read, an amount, a group — and an additive
+change leaves an old file meaning exactly what it meant when it was written.
+Turning those away would have faced the next release with a choice between
+refusing every file on every user's disk and never bumping the number at all,
+which is how a version gate becomes decorative. So the policy is stated rather
+than implied: **an additive change leaves the number alone and old files keep
+reading; a breaking change bumps it, and old files are then migrated or
+refused deliberately.** That is the whole answer to risk 5 in the register —
+grammar churn breaking saved strategies — and it is an answer rather than a
+hope, because it is the only reading under which a saved strategy either runs
+as it was written or says why it will not.
 
 ## 6. Progressions Are Declared Per Stream
 
@@ -779,37 +885,117 @@ Bench observer is attached (and never otherwise, per the `Noop` discipline).
 Compile-time, shown in the editor as plain sentences, in the register of GUI
 spec §6.1's order-ticket validation.
 
-**The original claim was six checks.** One of them ships. A second is
-computed and shown nowhere. Four do not exist, and this section promised them
-in the present tense while P5's roadmap entry said they had joined the
-order-ticket strip. Each is listed below with what is true of it.
+**The original claim was six checks**, and a previous revision of this section
+recorded that one shipped, one was computed and shown nowhere, and four did
+not exist. **All six exist now**, in
+[check.rs](../crates/craps-engine/src/strategy/check.rs). What follows is what
+they do, and — as important — what they do not.
 
-- **Never bets. Ships, and is the model for the rest.** No reachable rule
-  places a bet: the strategy does not compile, Run is refused, and the sentence
-  is *"This strategy never places a bet, so there is nothing to simulate."*
-- **Cost. Computable, and displayed nowhere.** `Program::cost_bound` is the
-  static instruction-count bound Principle 3 buys, and it is exact — the length
-  of the op stream, every rule firing and every guard passing. Nothing reads
-  it. The Bench shows a rule count and what history the strategy reads, which
-  answers a neighbouring question and not this one. Surfacing it in the Engine
-  disclosure is small and undone.
-- **Dead rule. Deferred.** A rule whose condition is unsatisfiable, or shadowed
-  by an earlier rule on every path. **Had this existed it would have caught
-  `session-start`**, which parsed, compiled, was the first trigger offered in
-  the rule editor, and fired never for two milestones — five of twelve
-  implementers lost an attempt to it. The trigger fires now; the check that
-  would have found it still does not exist, and the Bench's per-rule `0×` is
-  what stands in for it, after a run rather than before one.
-- **Conflict. Deferred.** Two rules acting on the same bet at the same trigger.
-  Ordering resolves it (§4) and the Bench shows both firing, so this is
-  visible; it is not diagnosed.
-- **Exposure. Deferred.** Worst-case outlay on the first shooter against the
-  configured budget, computed from the rule set instead of the checkbox set.
-  The exposure strip still answers only for the bet rail.
-- **Clipping. Deferred.** A progression fragment whose step *k* stake exceeds
-  the table maximum. The clip itself is now an event at the moment it bites
-  (§3.4), which is the honest half; saying so before the run is the half that
-  is missing.
+### One refusal, five sentences
+
+The design turns on a distinction that is easy to lose and expensive to lose:
+**never-bets refuses to compile; nothing else stops a run.** A strategy that
+can never put money at risk has nothing to simulate, so it is a
+`CompileError`, Run is refused, and the sentence is *"This strategy never
+places a bet, so there is nothing to simulate."* Every other check is a
+`Diagnostic` — a thing worth saying about a strategy that still runs.
+
+That is not leniency, it is Principle 5. A dead rule is legal. A hedge that
+cannot hedge is legal. The app exists to model a belief exactly and draw what
+happens, and a compiler that refused unsound play could not refute unsound
+play — refutation is the product. So the checks below never gate anything.
+They exist so that nobody is surprised by their own rules.
+
+### Two entry points, because two of them need a table
+
+`check(strategy, program)` answers from the strategy alone: **dead rule**,
+**conflict**, **cost**. `against_table(strategy, rules, table_min, budget)`
+answers the two that cannot be asked without knowing where the strategy is
+being played: **exposure**, which is measured against a budget, and
+**clipping**, which is measured against a maximum. The compiler does not know
+either — it compiles a strategy once and the same program is then run at four
+table minimums in a single sweep — so asking it would have meant either
+compiling per table or answering with a number that was true of one of them.
+Whoever holds the configuration asks the second function.
+
+- **Never bets.** No reachable rule places a bet. The only one that refuses.
+- **Cost.** `Program::cost_bound` — instructions walked per decision in the
+  worst case, every rule firing and every guard passing, across *n* rules. It
+  is the number Principle 3 buys, and it is now shown rather than merely
+  computable. It is not a warning and is not drawn as one (below).
+- **Dead rule.** A rule whose condition can never hold: *"Rule 3 can never
+  fire: its condition is never true"*, or *"…its conditions cannot all hold at
+  once."*
+- **Conflict.** Two rules acting on the same bet at the same trigger, naming
+  which one wins.
+- **Exposure.** The most the strategy could have on the layout at once,
+  against the configured budget.
+- **Clipping.** A pressing system that will meet the table maximum, and on
+  which step.
+
+### What the dead-rule check does not do
+
+**It is deliberately not a theorem prover, and saying so is the point.** It
+folds the arithmetic a person actually writes — constants, negation, `not`,
+and the short-circuiting halves of `and` and `or`, so `when 0 and <anything>`
+is dead however complicated the other half is — and then looks for the two
+contradictions people actually make: asking one read to be two numbers (`point
+== 4 and point == 6`), and asking for a window with nothing in it (`profit >
+$100 and profit < $50`). Comparisons written either way round are the same
+claim, because a person writes both.
+
+Everything subtler is out of reach and stays out of reach. A rule dead because
+of what an earlier rule wrote to memory, a rule shadowed on every path by one
+above it, a condition unsatisfiable only given the rules of craps — none of
+these is caught, and the Bench's per-rule `0×` after a run is what answers for
+them, as it always did. That is a real limit and it is written here rather
+than left to be discovered, because the alternative is the overclaim this
+document has already been caught making once: a section that promises
+completeness teaches an author to read a clean strip as a proof, and a clean
+strip is not a proof.
+
+The other half of not crying wolf is the tests: alongside every condition the
+check must catch is a set of ordinary conditions it must leave alone —
+`point != 0 and point != 6`, `hits(6) >= 2 and hits(8) >= 2`, an `or` over a
+profit window. A diagnostic on any of those would teach authors to ignore the
+strip, which costs more than the check earns.
+
+### Why conflict only fires on unconditional rules
+
+Two rules touching one bet at one trigger conflict **only when neither carries
+a condition**. Two rules that each have a `when` may perfectly well be
+describing different moments — that is the most ordinary way there is to write
+a strategy, and *"press it on the first two hits, regress after that"* in §7 is
+exactly that shape. Diagnosing it would cry wolf on nearly every real
+strategy. Where both are unconditional there is no such reading: they fire
+together, always, and one of them is simply overwritten. The sentence says
+which: *"Rules 1 and 2 both act on place 6 at the same trigger; rule 2 is
+written later, so it wins."* `working` and `leave` are not stakes and conflict
+with nothing.
+
+### Exposure is a floor when it cannot be a figure
+
+Worst-case outlay counts one stake per distinct bet, because a bet is one slot
+however many rules mention it, and takes the largest stake any rule names for
+it. Where an amount is *written* — `$60`, `2 units` — that is exact. Where it
+is *computed* — `stake(place 6) * 2`, `min(cash / 4, $50)`, or anything the
+table answers like `base`, `pressed` and `max` — there is no static answer, so
+the bet contributes its base and the whole figure is reported as a floor:
+*"This strategy can have **at least** $120 on the layout at once, and the
+budget is $50."* A floor that says it is a floor is worth having; a number
+that quietly under-reports because one amount was multiplied is not.
+
+### Where they surface
+
+In the Design screen's order-ticket strip, beneath the rule count and the
+cheapest bet, in the register that strip already uses for the bet rail —
+because a rule set and a checkbox set are two ways to build the same player,
+and their validation should not read like two different features. Warnings are
+amber, which is the register the app reserves for something that is wrong: a
+dead rule, a conflict, a clip, and an exposure that exceeds the budget. An
+exposure *within* budget is a reassurance and the cost line is an engine
+disclosure, so neither takes amber; they are plain text, one line each, said
+because the reader is entitled to them and not because anything needs doing.
 
 What the compiler *does* refuse, beyond never-bets, is its own limits rather
 than these diagnostics: a memory slot used but never declared, more slots or

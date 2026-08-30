@@ -178,19 +178,6 @@ pub struct Program {
     /// Which derived history this program reads, derived from the reads it
     /// actually makes rather than declared by hand.
     pub features: FeatureMask,
-    /// True when every decision this program makes is a pure function of
-    /// the point, the layout, and the bankroll — no dice history, no
-    /// memory, no trigger that depends on what the dice showed.
-    ///
-    /// Such a program can be skipped exactly when the built-in player skips
-    /// itself: until a resolution changes cash, bets, or the point, asking
-    /// again would produce the same answer. This is not a shortcut around
-    /// the one-decision-per-roll contract; it is that contract noticing the
-    /// decision cannot have changed.
-    pub(crate) placement_only: bool,
-    /// Whether the program bets on one-roll propositions, which resolve
-    /// every roll and so always need asking again.
-    pub(crate) bets_one_roll: bool,
     /// The pressing system on each bet stream.
     pub(crate) progressions: [crate::bets::Progression; STREAMS],
     /// FNV-1a over the compiled form — the identity a Scenario Sentence
@@ -349,6 +336,8 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                 point: self.point,
                 cash: self.cash,
                 start_cash: self.start_cash,
+                table_min: self.min,
+                table_max: self.table_max,
                 handle: self.resolved_wagered_cents,
                 stakes: Stakes {
                     pass: self.pass,
@@ -359,6 +348,8 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                     dc_flat: self.dc_flat,
                     place: &self.place,
                     hard: &self.hard,
+                    place_working: &self.place_working,
+                    hard_working: &self.hard_working,
                     come_points: &self.come_points,
                     come_odds: &self.come_odds,
                     dc_points: &self.dc_points,
@@ -575,6 +566,14 @@ fn guard_holds(g: Guard, v: &TableView<'_>) -> bool {
     }
 }
 
+/// The same arithmetic the machine does, for a compiler that wants to know
+/// what an expression comes to before anything runs. One definition, so a
+/// static check can never disagree with the interpreter it is checking.
+#[inline]
+pub(crate) fn fold_bin(op: BinOp, a: i64, b: i64) -> i64 {
+    apply_bin(op, a, b)
+}
+
 #[inline]
 fn apply_bin(op: BinOp, a: i64, b: i64) -> i64 {
     match op {
@@ -621,8 +620,12 @@ fn read(v: &TableView<'_>, r: Read) -> i64 {
         Read::PeakProfit => v.peak_profit(),
         Read::Drawdown => v.drawdown(),
         Read::Handle => v.handle(),
+        Read::BuyIn => v.buy_in(),
+        Read::TableMin => v.table_min(),
+        Read::TableMax => v.table_max(),
         Read::Stake(b) => v.stake(b),
         Read::Up(b) => v.up(b) as i64,
+        Read::Working(b) => v.working(b),
         Read::LiveCome => v.live_come(),
         Read::LiveDontCome => v.live_dont_come(),
         Read::ComePoint(n) => v.come_point(n),

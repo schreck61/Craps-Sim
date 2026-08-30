@@ -435,9 +435,11 @@ pub fn run_program_drawdown_session(
         pass_line: false,
         ..Default::default()
     };
-    let cheapest = program.cheapest_stake(rules, table_min_cents);
+    // The drawdown run has no ruin rule to consult, so the cheapest stake is
+    // never asked for — walking the whole op stream to compute one and then
+    // throwing it away was work done once per session across a whole sweep.
     run_drawdown_with_player(
-        &Compiled::new(program, cheapest),
+        &Compiled::new(program, 0),
         &idle,
         rules,
         table_min_cents,

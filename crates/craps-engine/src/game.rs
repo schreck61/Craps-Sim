@@ -652,12 +652,18 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
         let was_comeout = self.point.is_none();
         if !F::MASK.is_empty() {
             self.hist.fired = 0;
-            self.hist.won = 0;
-            self.hist.lost = 0;
-            self.hist.paid = [0; crate::strategy::view::STREAMS];
             self.hist.come_established = 0;
             self.hist.dont_come_established = 0;
             self.hist.last_total_now = t;
+            // The win/loss window is only ever written under this same
+            // runtime gate, so clearing it under any other one was a hundred
+            // and fifty bytes zeroed every roll on behalf of a strategy that
+            // never asks what won.
+            if self.features.has(FeatureMask::STREAKS) {
+                self.hist.won = 0;
+                self.hist.lost = 0;
+                self.hist.paid = [0; crate::strategy::view::STREAMS];
+            }
             if !self.features.is_empty() {
                 self.record_roll(t);
             }
@@ -1105,6 +1111,8 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
             point: self.point,
             cash: self.cash,
             start_cash: self.start_cash,
+            table_min: self.min,
+            table_max: self.table_max,
             handle: self.resolved_wagered_cents,
             stakes: Stakes {
                 pass: self.pass,
@@ -1115,6 +1123,8 @@ impl<'a, O: RollObserver, F: Features> Session<'a, O, F> {
                 dc_flat: self.dc_flat,
                 place: &self.place,
                 hard: &self.hard,
+                place_working: &self.place_working,
+                hard_working: &self.hard_working,
                 come_points: &self.come_points,
                 come_odds: &self.come_odds,
                 dc_points: &self.dc_points,

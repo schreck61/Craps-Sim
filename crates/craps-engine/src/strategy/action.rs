@@ -303,7 +303,18 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                     i.map_or(0, |i| self.dc_lay_win[i]),
                 )
             }
-            _ => (0, 0),
+            // Exhaustive rather than a wildcard: a bet type added later must
+            // make this stop compiling, not fall silently into "there is
+            // nothing there" at a table that would have taken it.
+            BetRef::Pass
+            | BetRef::DontPass
+            | BetRef::Come
+            | BetRef::DontCome
+            | BetRef::Place(_)
+            | BetRef::Hardway(_)
+            | BetRef::Field
+            | BetRef::AnySeven
+            | BetRef::AnyCraps => (0, 0),
         };
         let _ = win;
         if cur == 0 {
@@ -658,7 +669,19 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
                 BetRef::DontPassLay => self.dont_lay,
                 BetRef::ComeOdds(n) => place_index(n).map_or(0, |i| self.come_odds[i]),
                 BetRef::DontComeLay(n) => place_index(n).map_or(0, |i| self.dc_lay[i]),
-                _ => 0,
+                // `flat_spec_any` answered for every other shape already, so
+                // this arm is the four odds bets and nothing else. Spelled
+                // out so a new bet type has to be routed rather than quietly
+                // reading as empty.
+                BetRef::Pass
+                | BetRef::DontPass
+                | BetRef::Come
+                | BetRef::DontCome
+                | BetRef::Place(_)
+                | BetRef::Hardway(_)
+                | BetRef::Field
+                | BetRef::AnySeven
+                | BetRef::AnyCraps => 0,
             },
         }
     }
@@ -726,7 +749,14 @@ impl<O: RollObserver, F: Features> Session<'_, O, F> {
             },
             BetRef::AnySeven => self.p_any7.stake,
             BetRef::AnyCraps => self.p_anycraps.stake,
-            _ => base,
+            // Odds have no stream of their own; the flat they sit behind
+            // presses for both. Named rather than wildcarded so a new bet
+            // type must decide which it is.
+            BetRef::PassOdds
+            | BetRef::DontPassLay
+            | BetRef::ComeOdds(_)
+            | BetRef::DontComeLay(_)
+            | BetRef::Place(_) => base,
         };
         self.prog_stake(want, base, bet)
     }

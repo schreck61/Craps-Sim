@@ -79,7 +79,16 @@ fn streamed_bets() -> Vec<BetRef> {
 
 /// What a condition can look at. Reads that take a bet or a number are
 /// offered per bet and per box number, so the slot stays a flat list.
-fn reads() -> Vec<(String, Read)> {
+///
+/// Built once. It is the same hundred and fifty strings every time, and it
+/// was being assembled for every clause of every rule on every frame — the
+/// slot list is vocabulary, not state.
+fn reads() -> &'static [(String, Read)] {
+    static READS: std::sync::OnceLock<Vec<(String, Read)>> = std::sync::OnceLock::new();
+    READS.get_or_init(build_reads)
+}
+
+fn build_reads() -> Vec<(String, Read)> {
     let mut v: Vec<(String, Read)> = vec![
         ("the point".into(), Read::Point),
         ("the last total".into(), Read::LastTotal),
@@ -188,7 +197,15 @@ fn from_clauses(cs: &[Clause]) -> Option<Expr> {
 /// Draw the rule rows. Returns true when the tree changed.
 pub fn show(app: &mut App, ui: &mut egui::Ui) -> bool {
     let t = app.theme.clone();
-    let Some(mut strategy) = app.bench.parsed.clone() else {
+    // A block that still describes its rules is drawn as one card. Whether
+    // it does is asked rather than recorded, so unfolding to look costs
+    // nothing and editing two iterations apart dissolves the block by
+    // itself. Asking is a deep clone plus a re-parse of every block body
+    // once per bound value, which is not something to do sixty times a
+    // second to a strategy nobody is touching — so it is asked once per
+    // build rather than once per frame. Every edit here rewrites the source
+    // and rebuilds, so the answer cannot outlive the tree it was about.
+    let Some(mut strategy) = app.bench.take_rows() else {
         ui.label(
             RichText::new(
                 "Nothing to show yet — take the current player, open a saved \
@@ -203,10 +220,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> bool {
     let mut changed = false;
     let mut delete: Option<usize> = None;
     let mut move_up: Option<usize> = None;
-    // A block that still describes its rules is drawn as one card. Whether
-    // it does is asked, never remembered, so unfolding to look costs
-    // nothing and editing two iterations apart dissolves it by itself.
-    craps_engine::strategy::prune_blocks(&mut strategy);
+    let mut move_down: Option<usize> = None;
     let unfolded: std::collections::HashSet<usize> = ui.ctx().data(|d| {
         d.get_temp::<std::collections::HashSet<usize>>(egui::Id::new("rules_unfolded"))
             .unwrap_or_default()
@@ -248,7 +262,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> bool {
                         .and_then(|x| x.fire_counts.get(k).copied())
                 })
                 .sum();
-            changed |= block_card(app, ui, &t, &b, fired, span);
+            block_card(app, ui, &t, &b, fired, span);
             i += span;
             continue;
         }
@@ -261,6 +275,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> bool {
         // is a dozen widgets, and a screen reader landing on it should hear
         // the rule, not twelve dropdown labels in a row.
         let summary = craps_engine::strategy::render_rule(&strategy, i);
+        let count = strategy.rules.len();
         let frame = egui::Frame::NONE
             .fill(t.surface)
             .stroke(Stroke::new(1.0, t.hairline))
@@ -290,6 +305,19 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> bool {
                             .clicked()
                         {
                             delete = Some(i);
+                        }
+                        // Right-to-left, so these are added rightmost first
+                        // and read ↑ ↓ ×. Order matters to a rule set —
+                        // §5.1 asked for dragging, and one arrow was shipped
+                        // instead, which makes every order reachable and
+                        // moving a rule down a hunt for the row below it.
+                        // Neither arrow is disabled at the end of its
+                        // travel: it is absent, the way the up arrow always
+                        // was on the first row.
+                        if i + 1 < count
+                            && ui.small_button("↓").on_hover_text("move down").clicked()
+                        {
+                            move_down = Some(i);
                         }
                         if i > 0 && ui.small_button("↑").on_hover_text("move up").clicked() {
                             move_up = Some(i);
@@ -323,12 +351,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> bool {
         strategy.rules.swap(i - 1, i);
         changed = true;
     }
+    if let Some(i) = move_down {
+        strategy.rules.swap(i, i + 1);
+        changed = true;
+    }
 
     if changed {
         // The tree is the truth; the text is written from it and reparsed,
         // so the two editors cannot drift.
         app.bench.source = render(&strategy);
         app.bench.build();
+    } else {
+        app.bench.keep_rows(strategy);
     }
     changed
 }
@@ -339,15 +373,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> bool {
 /// existing for exactly as long as its iterations still agree. Edit two of
 /// them apart and it stops being one rule — at which point it stops being
 /// drawn as one, and rewriting it is the honest way back.
+///
+/// Nothing here edits the tree — unfolding writes a view flag and the body
+/// is shown as the words it was written as — so this reports no change.
 fn block_card(
-    app: &mut App,
+    app: &App,
     ui: &mut egui::Ui,
     t: &crate::ui::theme::Theme,
     b: &craps_engine::strategy::Block,
     fired: u32,
     span: usize,
-) -> bool {
-    let mut changed = false;
+) {
     egui::Frame::NONE
         .fill(t.surface)
         .stroke(Stroke::new(1.0, t.hairline_strong))
@@ -411,8 +447,6 @@ fn block_card(
             }
         });
     ui.add_space(4.0);
-    let _ = &mut changed;
-    changed
 }
 
 /// One rule: `on <trigger> when <clauses>: <actions>`.
@@ -527,7 +561,17 @@ fn trigger_label(t: Trigger) -> String {
         }
         Trigger::Win(b) => format!("{} wins", craps_engine::strategy::bet_name(b)),
         Trigger::Loss(b) => format!("{} loses", craps_engine::strategy::bet_name(b)),
-        _ => "every roll".into(),
+        // The coarse triggers are all in `TRIGGERS` and returned above, so
+        // these arms are unreachable — spelled out anyway, because the
+        // wildcard that used to stand here would have labelled a trigger
+        // added later as "every roll" and told the reader a plain untruth
+        // about their own rule.
+        Trigger::SessionStart
+        | Trigger::ComeOut
+        | Trigger::PointEstablished
+        | Trigger::PointMade
+        | Trigger::SevenOut
+        | Trigger::Roll => "every roll".into(),
     }
 }
 
@@ -620,7 +664,9 @@ fn guard_text(e: &Expr, vars: &[String]) -> String {
 fn clause_slots(ui: &mut egui::Ui, clause: &mut Clause) -> bool {
     let mut changed = false;
     let all = reads();
-    let (mut read, mut op, mut value, mut truthy) = match clause {
+    // `truthy` is what the clause is, not something the slots can change:
+    // there is no widget that turns a comparison into a bare read.
+    let (mut read, mut op, mut value, truthy) = match clause {
         Clause::Cmp { read, op, value } => (*read, *op, *value, false),
         Clause::Truthy(r) => (*r, BinOp::Ne, 0, true),
     };
@@ -634,7 +680,7 @@ fn clause_slots(ui: &mut egui::Ui, clause: &mut Clause) -> bool {
         .selected_text(label)
         .width(260.0)
         .show_ui(ui, |ui| {
-            for (l, r) in &all {
+            for (l, r) in all {
                 if ui.selectable_label(read == *r, l).clicked() {
                     read = *r;
                     changed = true;
@@ -688,7 +734,6 @@ fn clause_slots(ui: &mut egui::Ui, clause: &mut Clause) -> bool {
             Clause::Cmp { read, op, value }
         };
     }
-    let _ = &mut truthy;
     changed
 }
 

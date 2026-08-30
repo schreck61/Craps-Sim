@@ -382,14 +382,25 @@ fn parse_money(t: &str) -> Option<i64> {
     if let Some(rest) = t.strip_prefix('$') {
         let clean: String = rest.chars().filter(|c| *c != ',').collect();
         let (whole, frac) = match clean.split_once('.') {
-            Some((w, f)) => (w, format!("{f:0<2}")),
-            None => (clean.as_str(), "00".to_string()),
+            Some((w, f)) => (w, f),
+            None => (clean.as_str(), ""),
         };
+        // A third decimal place is not a rounding question, it is a figure
+        // this table cannot take: `$4.999` silently became $4.99, which is
+        // money the author did not write.
+        if frac.len() > 2 {
+            return None;
+        }
         let w: i64 = whole.parse().ok()?;
-        let f: i64 = frac.get(..2)?.parse().ok()?;
-        return Some(w * 100 + if w < 0 { -f } else { f });
+        let f: i64 = format!("{frac:0<2}").parse().ok()?;
+        // Dollars past a hundredth of the type overflow the cents they
+        // convert to. Under the test profile that panicked; in release it
+        // wrapped to a negative constant, which is a stake nobody wrote and
+        // a strategy nobody could debug.
+        w.checked_mul(100)?.checked_add(if w < 0 { -f } else { f })
+    } else {
+        t.parse::<i64>().ok()
     }
-    t.parse::<i64>().ok()
 }
 
 const PROGRESSION_WORDS: [(Progression, &str); 12] = [
@@ -450,7 +461,7 @@ const fn is_odds_ref(bet: BetRef) -> bool {
 /// rest of the parameterized reads are recognized only when a `(` follows,
 /// so `var hits` is a perfectly good memory slot and always was — reserving
 /// those would take names people actually want, for no reason at all.
-const RESERVED_WORDS: [&str; 34] = [
+const RESERVED_WORDS: [&str; 40] = [
     // reads spelled as a bare word
     "point",
     "come-out",
@@ -464,6 +475,9 @@ const RESERVED_WORDS: [&str; 34] = [
     "peak-profit",
     "drawdown",
     "handle",
+    "buy-in",
+    "table-min",
+    "table-max",
     "live-come",
     "live-dont-come",
     "on-table-face",
@@ -476,6 +490,7 @@ const RESERVED_WORDS: [&str; 34] = [
     "base",
     "pressed",
     "units",
+    "unit",
     "cents",
     // structure
     "strategy",
@@ -487,6 +502,8 @@ const RESERVED_WORDS: [&str; 34] = [
     "each",
     "as",
     "to",
+    "by",
+    "with",
     "of",
 ];
 
@@ -740,6 +757,7 @@ impl Parser {
         for (word, make) in [
             ("stake", 0usize),
             ("up", 1),
+            ("working", 6),
             ("wins", 2),
             ("losses", 3),
             ("streak", 4),
@@ -750,7 +768,7 @@ impl Parser {
                 // `stake` and `up` ask what is on the felt, which odds
                 // answer for themselves. The history reads ask what a bet
                 // has done, which odds have no record of.
-                let b = if make <= 1 {
+                let b = if make <= 1 || make == 6 {
                     self.bet_ref()?
                 } else {
                     self.recorded_bet_ref("keeps the record")?
@@ -762,6 +780,7 @@ impl Parser {
                     2 => Read::Wins(b),
                     3 => Read::Losses(b),
                     4 => Read::Streak(b),
+                    6 => Read::Working(b),
                     _ => Read::Paid(b),
                 }));
             }
@@ -804,6 +823,9 @@ impl Parser {
             ("peak-profit", Read::PeakProfit),
             ("drawdown", Read::Drawdown),
             ("handle", Read::Handle),
+            ("buy-in", Read::BuyIn),
+            ("table-min", Read::TableMin),
+            ("table-max", Read::TableMax),
             ("live-come", Read::LiveCome),
             ("live-dont-come", Read::LiveDontCome),
             ("on-table-face", Read::OnTableFace),
@@ -839,6 +861,22 @@ impl Parser {
     /// stake. `bet pass` is how a player says it, and making them write
     /// `bet pass pressed` on a table where nothing presses would be the
     /// language describing the engine rather than the game.
+    /// Where a press or a regress is heading: a stake to land on, or a step
+    /// to take from wherever the bet stands.
+    ///
+    /// `press place 6 by $6` is the sentence a player actually says at a
+    /// table — "press it" is a step, not a destination, and computing the
+    /// destination by hand (`to stake(place 6) + 600`, with the payout unit
+    /// worked out in cents) is the language asking the author to do the
+    /// table's arithmetic.
+    fn press_target(&mut self, verb: &str) -> Result<PressTarget, ParseError> {
+        if self.eat("by") {
+            return Ok(PressTarget::By(self.required_amount(verb)?));
+        }
+        self.expect("to")?;
+        Ok(PressTarget::To(self.required_amount(verb)?))
+    }
+
     /// An amount that has to be written down.
     ///
     /// Leaving it off `bet` means "whatever this stream presses to", which is
@@ -870,7 +908,9 @@ impl Parser {
             return Ok(AmountExpr::MaxOdds);
         }
         let e = self.expr()?;
-        if self.eat("units") || self.eat("u") {
+        // `1 unit` and `2 units` are both how a person writes it, and the
+        // singular used to fall through to cents and then choke on the word.
+        if self.eat("units") || self.eat("unit") || self.eat("u") {
             return Ok(AmountExpr::Units(e));
         }
         let _ = self.eat("cents");
@@ -905,6 +945,9 @@ impl Parser {
                     return Some(g.members());
                 }
             }
+        }
+        if self.eat("everything") {
+            return Some(Group::Everything.members());
         }
         None
     }
@@ -973,28 +1016,64 @@ impl Parser {
         self.expect("for")?;
         self.expect("each")?;
         self.expect("of")?;
-        let mut values = vec![self.number()?];
-        while self.eat(",") {
-            values.push(self.number()?);
+        // One list, or several walked in step. The second form is how a pair
+        // of numbers says something about each other: the 6 and the 8 are
+        // partners in half the strategies anybody writes, and without it
+        // "when this one wins, take the other one down" had to be written
+        // out per number — four sentences becoming twelve rules, each one a
+        // chance to type the wrong box number.
+        let mut lists: Vec<(String, Vec<i64>)> = Vec::new();
+        loop {
+            let mut values = vec![self.number()?];
+            while self.eat(",") {
+                values.push(self.number()?);
+            }
+            self.expect("as")?;
+            let name_line = self.line();
+            let name = self.next();
+            if name.is_empty() || parse_money(&name).is_some() {
+                return Err(ParseError {
+                    line: name_line,
+                    token: name,
+                    what: "expected a name to bind each value to".into(),
+                });
+            }
+            if self.vars.contains(&name) {
+                return Err(ParseError {
+                    line: name_line,
+                    token: name,
+                    what: "already the name of a memory slot; a binding is a \
+                           number, not memory, so give it its own name"
+                        .into(),
+                });
+            }
+            if lists.iter().any(|(n, _)| *n == name) {
+                return Err(ParseError {
+                    line: name_line,
+                    token: name,
+                    what: "already bound by this block".into(),
+                });
+            }
+            if let Some((_, first)) = lists.first() {
+                if first.len() != values.len() {
+                    return Err(ParseError {
+                        line: name_line,
+                        token: name,
+                        what: format!(
+                            "lists walked together must be the same length; \
+                             the first has {} and this has {}",
+                            first.len(),
+                            values.len()
+                        ),
+                    });
+                }
+            }
+            lists.push((name, values));
+            if !self.eat("with") {
+                break;
+            }
         }
-        self.expect("as")?;
-        let name = self.next();
-        if name.is_empty() || parse_money(&name).is_some() {
-            return Err(ParseError {
-                line: self.line(),
-                token: name,
-                what: "expected a name to bind each value to".into(),
-            });
-        }
-        if self.vars.contains(&name) {
-            return Err(ParseError {
-                line: self.line(),
-                token: name,
-                what: "already the name of a memory slot; a binding is a \
-                       number, not memory, so give it its own name"
-                    .into(),
-            });
-        }
+        let (name, values) = lists[0].clone();
         // Just past the brace, not at the first token inside it: comments
         // are not tokens, so starting at the first rule would drop any note
         // the author wrote at the top of the block.
@@ -1016,11 +1095,15 @@ impl Parser {
 
         let mut out = Vec::new();
         let mut per_iteration = 0usize;
-        for (k, v) in values.iter().enumerate() {
+        for (k, _) in values.iter().enumerate() {
             self.at = body_start;
-            self.bindings.push((name.clone(), *v));
+            for (n, vs) in &lists {
+                self.bindings.push((n.clone(), vs[k]));
+            }
             let rules = self.rules_until_end();
-            self.bindings.pop();
+            for _ in &lists {
+                self.bindings.pop();
+            }
             let rules = rules?;
             if k == 0 {
                 per_iteration = rules.len();
@@ -1051,6 +1134,9 @@ impl Parser {
         self.blocks.push(crate::strategy::ast::Block {
             name,
             values,
+            // Everything after the first list, so the block can write its own
+            // header back out exactly as it was read.
+            partners: lists[1..].to_vec(),
             body,
             start: rules_so_far,
             len: per_iteration,
@@ -1069,26 +1155,27 @@ impl Parser {
         }
         if self.eat("press") {
             if let Some(members) = self.group() {
-                self.expect("to")?;
-                let a = self.required_amount("press")?;
-                return Ok(members.iter().map(|b| Stmt::Press(*b, a.clone())).collect());
-            }
-            let b = self.bet_ref()?;
-            self.expect("to")?;
-            return Ok(vec![Stmt::Press(b, self.required_amount("press")?)]);
-        }
-        if self.eat("regress") {
-            if let Some(members) = self.group() {
-                self.expect("to")?;
-                let a = self.required_amount("regress")?;
+                let by = self.press_target("press")?;
                 return Ok(members
                     .iter()
-                    .map(|b| Stmt::Regress(*b, a.clone()))
+                    .map(|b| Stmt::Press(*b, by.amount_for(*b)))
                     .collect());
             }
             let b = self.bet_ref()?;
-            self.expect("to")?;
-            return Ok(vec![Stmt::Regress(b, self.required_amount("regress")?)]);
+            let by = self.press_target("press")?;
+            return Ok(vec![Stmt::Press(b, by.amount_for(b))]);
+        }
+        if self.eat("regress") {
+            if let Some(members) = self.group() {
+                let by = self.press_target("regress")?;
+                return Ok(members
+                    .iter()
+                    .map(|b| Stmt::Regress(*b, by.amount_for(*b)))
+                    .collect());
+            }
+            let b = self.bet_ref()?;
+            let by = self.press_target("regress")?;
+            return Ok(vec![Stmt::Regress(b, by.amount_for(b))]);
         }
         if self.eat("down") {
             if let Some(members) = self.group() {
@@ -1168,7 +1255,23 @@ pub fn parse(src: &str) -> Result<Strategy, ParseError> {
     }
     p.expect("language")?;
     let version = p.number()?;
-    if version != LANGUAGE_VERSION as i64 {
+    // Newer is refused, older is read.
+    //
+    // Refusing a version this engine has never seen is the whole point of the
+    // header: a strategy written against a grammar with words in it that are
+    // not here would be misread rather than rejected, and misreading is the
+    // one failure a save format may not have.
+    //
+    // Refusing an *older* one is a different thing entirely, and the first
+    // version of this gate did both. Every grammar change so far has been
+    // additive — a trigger, a read, an amount — and additive changes leave old
+    // files meaning exactly what they meant. Turning them away would have
+    // faced the next release with a choice between refusing every file on
+    // every user's disk and never bumping the number at all, which is how a
+    // version gate becomes decorative. So: a breaking change bumps
+    // [`LANGUAGE_VERSION`] and old files are migrated or refused deliberately;
+    // an additive one leaves it alone and old files keep reading.
+    if version > LANGUAGE_VERSION as i64 || version < 1 {
         return Err(ParseError {
             line: p.line(),
             token: version.to_string(),
@@ -1305,11 +1408,15 @@ fn read_text(r: Read) -> String {
         Read::PeakProfit => "peak-profit".into(),
         Read::Drawdown => "drawdown".into(),
         Read::Handle => "handle".into(),
+        Read::BuyIn => "buy-in".into(),
+        Read::TableMin => "table-min".into(),
+        Read::TableMax => "table-max".into(),
         Read::LiveCome => "live-come".into(),
         Read::LiveDontCome => "live-dont-come".into(),
         Read::OnTableFace => "on-table-face".into(),
         Read::Stake(b) => format!("stake({})", bet_text(b)),
         Read::Up(b) => format!("up({})", bet_text(b)),
+        Read::Working(b) => format!("working({})", bet_text(b)),
         Read::Wins(b) => format!("wins({})", bet_text(b)),
         Read::Losses(b) => format!("losses({})", bet_text(b)),
         Read::Streak(b) => format!("streak({})", bet_text(b)),
@@ -1439,6 +1546,59 @@ fn amount_text(a: &AmountExpr, vars: &[String]) -> String {
         AmountExpr::Cents(Expr::Const(v)) if *v >= 0 => money_text(*v),
         AmountExpr::Cents(e) => expr_text(e, vars),
     }
+}
+
+/// A press written as a destination or as a step.
+///
+/// A step is sugar: it becomes the destination it names, computed from what
+/// is on the bet. Desugaring here rather than in the tree keeps the AST one
+/// shape — the round-trip law is about the tree, and two ways to say the same
+/// press would be two trees the rule editor would have to learn.
+enum PressTarget {
+    To(AmountExpr),
+    By(AmountExpr),
+}
+
+impl PressTarget {
+    fn amount_for(&self, bet: BetRef) -> AmountExpr {
+        match self {
+            PressTarget::To(a) => a.clone(),
+            PressTarget::By(step) => {
+                let step = match step {
+                    // `by 1 unit` is a step of one table minimum, so it has
+                    // to become cents before it can be added to a stake.
+                    AmountExpr::Units(e) => {
+                        Expr::bin(BinOp::Mul, e.clone(), Expr::Read(Read::TableMin))
+                    }
+                    AmountExpr::Cents(e) => e.clone(),
+                    // `base`, `pressed` and `max` are answers the table
+                    // gives, not distances; a step of one of those is a step
+                    // of the bet's own base.
+                    _ => Expr::Read(Read::TableMin),
+                };
+                AmountExpr::Cents(Expr::bin(BinOp::Add, Expr::Read(Read::Stake(bet)), step))
+            }
+        }
+    }
+}
+
+/// A block's header, written the way it was read.
+///
+/// Built in one place because two of them need it — the renderer, and the
+/// check that re-reads a block to ask whether it is still one — and a header
+/// those two spelled differently would make every block dissolve on save.
+fn block_header(name: &str, values: &[i64], partners: &[(String, Vec<i64>)]) -> String {
+    let list = |vs: &[i64]| {
+        vs.iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut out = format!("for each of {} as {name}", list(values));
+    for (n, vs) in partners {
+        out += &format!(" with {} as {n}", list(vs));
+    }
+    out
 }
 
 /// Cents as a person writes them: `$150`, `$12.50`.
@@ -1574,14 +1734,21 @@ pub fn block_holds(s: &Strategy, b: &crate::strategy::ast::Block) -> bool {
         // tried the bare parse first and gave up when it failed — so every
         // block that touched memory silently stopped being a block on the
         // first save, taking the author's comments with it.
+        // One value from each list, walked in step, so a paired block is
+        // re-read exactly as it was written.
+        let slice: Vec<(String, Vec<i64>)> = b
+            .partners
+            .iter()
+            .map(|(n, vs)| (n.clone(), vec![vs[k]]))
+            .collect();
         let src = format!(
-            "strategy \"x\" language {LANGUAGE_VERSION}\n{}\nfor each of {v} as {} {{\n{}\n}}\n",
+            "strategy \"x\" language {LANGUAGE_VERSION}\n{}\n{} {{\n{}\n}}\n",
             s.vars
                 .iter()
                 .map(|n| format!("var {n} = 0"))
                 .collect::<Vec<_>>()
                 .join("\n"),
-            b.name,
+            block_header(&b.name, &[*v], &slice),
             b.body
         );
         let Ok(one) = parse(&src) else {
@@ -1653,13 +1820,8 @@ pub fn render(s: &Strategy) -> String {
     while i < s.rules.len() {
         if let Some(b) = held.blocks.iter().find(|b| b.start == i) {
             out += &format!(
-                "\nfor each of {} as {} {{\n{}\n}}\n",
-                b.values
-                    .iter()
-                    .map(|v| v.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                b.name,
+                "\n{} {{\n{}\n}}\n",
+                block_header(&b.name, &b.values, &b.partners),
                 b.body
             );
             i += b.len * b.values.len();
@@ -2433,6 +2595,110 @@ on roll when profit <= -$200 or profit >= $150:
         round_trip(&s);
         assert_eq!(parse_money("$1,000"), Some(100_000));
         assert_eq!(parse_money("$5"), Some(500));
+    }
+
+    /// The reads a strategy needs to be written about a table rather than
+    /// about the one table it was typed at.
+    #[test]
+    fn the_table_answers_for_itself() {
+        let s = parse(
+            "strategy \"x\" language 1\n\
+             on roll when profit <= 0 - buy-in / 2:\n    leave\n\
+             on come-out when table-min <= $10 and table-max >= $1,000:\n    bet pass base\n",
+        )
+        .unwrap_or_else(|e| panic!("{}", e.message()));
+        round_trip(&s);
+        // None of them needs an accumulator: the table already knows.
+        let p = crate::strategy::compile(&s).unwrap();
+        assert!(p.features.is_empty(), "{:?}", p.features);
+    }
+
+    /// `press it` is a step, and the language can say so.
+    #[test]
+    fn a_press_can_be_a_step_rather_than_a_destination() {
+        let by = parse(
+            "strategy \"x\" language 1\non win of place 6:\n press place 6 by 1 unit\n\
+             on roll:\n bet place 6\n",
+        )
+        .unwrap_or_else(|e| panic!("{}", e.message()));
+        // Sugar: it becomes the destination it names, so there is one tree
+        // and the rule editor has one shape to learn.
+        let to = parse(
+            "strategy \"x\" language 1\non win of place 6:\n \
+             press place 6 to stake(place 6) + 1 * table-min\non roll:\n bet place 6\n",
+        )
+        .unwrap();
+        assert_eq!(by.rules, to.rules);
+        round_trip(&by);
+        // And the singular reads, which it did not.
+        assert!(parse("strategy \"x\" language 1\non roll:\n bet pass 1 unit\n").is_ok());
+    }
+
+    /// A block can say something about a pair.
+    #[test]
+    fn lists_can_be_walked_in_step() {
+        let s = parse(
+            "strategy \"x\" language 1\n\n\
+             for each of 6, 8 as n with 8, 6 as other {\n    \
+             on win of place n:\n        \
+             down place other\n}\n",
+        )
+        .unwrap_or_else(|e| panic!("{}", e.message()));
+        assert_eq!(s.rules.len(), 2);
+        // The 6 winning takes down the 8, and the 8 the 6 — which is the
+        // whole point, and was four rules of hand-written box numbers.
+        assert_eq!(s.rules[0].body, vec![Stmt::Down(BetRef::Place(8))]);
+        assert_eq!(s.rules[1].body, vec![Stmt::Down(BetRef::Place(6))]);
+        assert!(render(&s).contains("for each of 6, 8 as n with 8, 6 as other"));
+        round_trip(&s);
+
+        // Lists walked together have to be the same length, and a name may
+        // not be bound twice.
+        for bad in [
+            "strategy \"x\" language 1\nfor each of 6, 8 as n with 4 as m {\n on roll:\n bet pass\n}\n",
+            "strategy \"x\" language 1\nfor each of 6, 8 as n with 4, 5 as n {\n on roll:\n bet pass\n}\n",
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    /// The two pieces of vocabulary §3 promised and never had.
+    #[test]
+    fn everything_and_working_are_sayable() {
+        let s = parse(
+            "strategy \"x\" language 1\n\
+             on roll when working(place 6) == 0:\n    working place 6 on\n\
+             on point-established:\n    bet place inside base\n\
+             on roll when profit >= $100:\n    down everything\n",
+        )
+        .unwrap_or_else(|e| panic!("{}", e.message()));
+        round_trip(&s);
+        // `everything` is what a dealer would sweep: the numbers and the
+        // hardways, not the contract bets or the one-roll propositions.
+        assert_eq!(s.rules[2].body.len(), 10);
+        assert!(s.rules[2].body.contains(&Stmt::Down(BetRef::Hardway(10))));
+        assert!(!s.rules[2].body.contains(&Stmt::Down(BetRef::Pass)));
+    }
+
+    /// Money past what a cent can hold is refused, not wrapped.
+    #[test]
+    fn money_that_does_not_fit_is_refused() {
+        assert_eq!(parse_money("$92233720368547759"), None);
+        // And a third decimal place is a figure this table cannot take,
+        // rather than one silently rounded down to one it can.
+        assert_eq!(parse_money("$4.999"), None);
+        assert_eq!(parse_money("$4.99"), Some(499));
+        assert_eq!(parse_money("$4.9"), Some(490));
+    }
+
+    /// Older grammars still read; newer ones are refused.
+    #[test]
+    fn the_version_gate_admits_the_past_and_refuses_the_future() {
+        assert!(parse("strategy \"x\" language 1\non roll:\n bet pass\n").is_ok());
+        for bad in ["2", "99", "0", "-1"] {
+            let src = format!("strategy \"x\" language {bad}\non roll:\n bet pass\n");
+            assert!(parse(&src).is_err(), "version {bad} should be refused");
+        }
     }
 
     /// Randomized trees, so the law is tested against shapes nobody thought

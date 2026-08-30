@@ -75,6 +75,27 @@ pub struct BenchState {
     pub library_loaded: bool,
     /// The last thing the library did, in words.
     pub library_note: Option<String>,
+    /// The tree the rule rows edit: `parsed` with the blocks that have
+    /// stopped describing their rules dropped.
+    ///
+    /// Kept, because deriving it is a deep clone plus a `prune_blocks`, and
+    /// `prune_blocks` re-parses every block body once per bound value — work
+    /// the rows were paying on every frame the Design screen was up, for a
+    /// tree that only changes when the parse does. `build()` drops it, which
+    /// is the whole of the invalidation: nothing else writes `parsed`.
+    pub rows: Option<Strategy>,
+    /// Which strategy played the night the Replay ledger is showing, noted
+    /// the first time that night reaches the ledger. Held weakly and keyed
+    /// by the trace's own identity: the night belongs to Replay, and the
+    /// only question here is whether this is still the same one.
+    ///
+    /// The inner `None` is "this night was seen and nothing here could name
+    /// it", which is not the same as "not seen yet" — asking again later
+    /// would stamp the night with whatever had been compiled since.
+    pub benched: Option<(
+        std::sync::Weak<BenchTrace>,
+        Option<crate::config::StrategyRef>,
+    )>,
 }
 
 impl BenchState {
@@ -83,6 +104,9 @@ impl BenchState {
     pub fn build(&mut self) {
         self.parsed = None;
         self.program = None;
+        // The rows' pruned copy is derived from the parse and outlives
+        // nothing else, so it goes wherever the parse goes.
+        self.rows = None;
         if self.source.trim().is_empty() {
             self.error =
                 Some("Nothing to run yet — take the current player, or paste a strategy.".into());
@@ -102,6 +126,54 @@ impl BenchState {
                 }
             },
         }
+    }
+
+    /// Hand the rule rows the tree they edit, deriving it again only after
+    /// a build has thrown the last one away.
+    pub fn take_rows(&mut self) -> Option<Strategy> {
+        if self.rows.is_none() {
+            self.rows = self.parsed.clone();
+            if let Some(s) = &mut self.rows {
+                craps_engine::strategy::prune_blocks(s);
+            }
+        }
+        self.rows.take()
+    }
+
+    /// Take the tree back, unedited. An edited one is not returned: the
+    /// source is rewritten from it and rebuilt, and the next frame derives
+    /// the pruned copy from that.
+    pub fn keep_rows(&mut self, rows: Strategy) {
+        self.rows = Some(rows);
+    }
+
+    /// Note which strategy produced `trace`, the first time this night is
+    /// seen.
+    ///
+    /// Replay cuts a night from `live_program()` and the ledger is the next
+    /// thing to read it, so when a night first arrives here the editor is
+    /// still holding the program that played it — nothing can have edited
+    /// the strategy in between without a frame on Design. What happens after
+    /// that is exactly what this exists to survive.
+    pub fn note_night(&mut self, trace: &std::sync::Arc<BenchTrace>) {
+        let same = self.benched.as_ref().is_some_and(|(w, _)| {
+            w.upgrade()
+                .is_some_and(|t| std::sync::Arc::ptr_eq(&t, trace))
+        });
+        if same {
+            return;
+        }
+        self.benched = Some((
+            std::sync::Arc::downgrade(trace),
+            self.program
+                .as_ref()
+                .map(|p| crate::config::StrategyRef::of(p)),
+        ));
+    }
+
+    /// What played the night on Replay, when it is known.
+    pub fn night_player(&self) -> Option<&crate::config::StrategyRef> {
+        self.benched.as_ref().and_then(|(_, r)| r.as_ref())
     }
 
     /// Whether the editor holds work that is not on disk.
@@ -463,6 +535,7 @@ pub fn ledger(app: &mut App, ui: &mut egui::Ui, position: usize) {
     let Some(trace) = app.replay.bench.clone() else {
         return;
     };
+    app.bench.note_night(&trace);
     ui.add_space(8.0);
     run_conditions(app, ui, &trace);
     ui.add_space(6.0);
@@ -483,15 +556,14 @@ fn run_conditions(app: &App, ui: &mut egui::Ui, trace: &BenchTrace) {
     // The reference the sentence carries, spelled the way the sentence
     // spells it. This printed four hex digits of a hash the rest of the app
     // prints eight of, so a reader checking a benched night against its own
-    // sentence had to know one was a truncation of the other.
+    // sentence had to know one was a truncation of the other — and it read
+    // the *editor's* program, so a rule edited after the run relabelled a
+    // night with a strategy that never played a roll of it. The night is
+    // named by what played it, noted when it was cut.
     let name = app
         .bench
-        .program
-        .as_ref()
-        .map(|p| {
-            let r = crate::config::StrategyRef::of(p);
-            format!("{} #{}", r.name, r.short())
-        })
+        .night_player()
+        .map(|r| format!("{} #{}", r.name, r.short()))
         .unwrap_or_else(|| "strategy".into());
     ui.label(
         RichText::new(format!(
@@ -912,6 +984,65 @@ mod tests {
         let e = b.error.expect("refused");
         assert!(e.contains("version 99"), "{e}");
         assert!(b.program.is_none());
+    }
+
+    /// The rows' tree is derived once per build rather than once per frame.
+    /// Both halves of that are load-bearing: the tree handed out must come
+    /// back untouched, and a build must throw it away — a copy that outlived
+    /// its parse would leave the editor drawing rules that are no longer
+    /// there.
+    #[test]
+    fn the_rows_tree_is_kept_until_the_next_build() {
+        let mut b = from_source("strategy \"a\" language 1\non come-out:\n    bet pass\n".into());
+        let mut one = b.take_rows().expect("a tree to edit");
+        assert_eq!(one.name, "a");
+        // A scribble no parse of the source could produce, so what comes
+        // back proves whether it was kept or re-derived.
+        one.name = "scribbled".into();
+        b.keep_rows(one);
+        assert_eq!(b.take_rows().unwrap().name, "scribbled");
+
+        b.source = "strategy \"b\" language 1\non come-out:\n    bet pass\n".into();
+        b.build();
+        assert_eq!(b.take_rows().unwrap().name, "b", "a new parse, a new tree");
+    }
+
+    /// The ledger names a night by what played it. Editing the strategy
+    /// afterwards must not relabel a night the new rules never played a roll
+    /// of — the whole point of the header is provenance.
+    #[test]
+    fn a_benched_night_keeps_the_name_of_what_played_it() {
+        let cfg = SimConfig::default();
+        let night = |b: &BenchState| {
+            std::sync::Arc::new(craps_engine::strategy::bench_session(
+                b.program.as_ref().expect("compiled"),
+                &cfg.rules(),
+                500,
+                cfg.budget_cents,
+                cfg.quit_target_cents(),
+                200,
+                200,
+                7,
+            ))
+        };
+
+        let mut b =
+            from_source("strategy \"first\" language 1\non come-out:\n    bet pass\n".into());
+        let trace = night(&b);
+        b.note_night(&trace);
+        let played = b.night_player().cloned().expect("a night has a player");
+        assert_eq!(played.name, "first");
+
+        // The editor moves on. The night does not.
+        b.source = "strategy \"second\" language 1\non come-out:\n    bet pass\n".into();
+        b.build();
+        b.note_night(&trace);
+        assert_eq!(b.night_player(), Some(&played), "the night was relabelled");
+
+        // A night cut from the new program takes the new program's name.
+        let next = night(&b);
+        b.note_night(&next);
+        assert_eq!(b.night_player().unwrap().name, "second");
     }
 
     #[test]

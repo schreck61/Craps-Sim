@@ -36,6 +36,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   previously took a four-rule memory idiom per number to approximate.
 - **`paid(place 6)`** — what a bet was just paid, so pressing by half the
   winnings is a rule and not only a progression.
+- **The table answers for itself.** `buy-in`, `table-min` and `table-max`
+  are readable, so a stop-loss can be half the buy-in rather than a dollar
+  figure that is right at one table and quietly wrong at every other, and a
+  Martingale can see its own ceiling coming instead of pushing into a bet
+  the table will truncate. Seven of the twelve strategies written against
+  this language in review hit this.
+- **`press place 6 by 1 unit`** — "press it" is a step, not a destination,
+  and computing the destination by hand was the language asking the author
+  to do the table's arithmetic. `regress … by` too, and `1 unit` now reads
+  as well as `2 units`.
+- **`working(place 6)`** and the **`everything`** group — both were in the
+  specification and neither was built. A strategy could turn a bet off and
+  not ask whether it had; `down everything` sweeps what a dealer would.
+- **`for each of 6, 8 as n with 8, 6 as other { … }`** — lists walked in
+  step, so a block can say something about a pair. The 6 and the 8 are
+  partners in half the strategies anybody writes, and "when this one wins,
+  take the other one down" previously had to be written out per number.
 - **`for each of 4, 5, 6, 8, 9, 10 as n { … }`** — a rule written once and
   produced per number. 3-Point Molly was nine rules, six of them the same
   rule with a different number in it; it is four now. Blocks nest, and the
@@ -45,6 +62,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The static checks §9 promised.** One of the six shipped; the other five
+  were a heading. A rule whose condition can never hold, two unconditional
+  rules fighting over one bet, the worst money this strategy can have on the
+  layout against the budget, the step at which a pressing system meets the
+  table maximum, and the instructions a decision costs — all of them are
+  sentences in the order-ticket strip now, before a run rather than after.
+  None of them stops a run: a dead rule is legal, and a language that
+  refused unsound play could not refute it. The dead-rule check is not a
+  theorem prover and says so.
 - **A strategy can no longer quietly play something other than what it
   says.** A review of the language ([STRATEGY_DSL_REVIEW.md](docs/STRATEGY_DSL_REVIEW.md))
   found that its worst faults were all silent ones, which is the single
@@ -104,6 +130,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `BetEventKind::Won` records whether the stake came back, which a ledger
   needs in order to account for the rail. Place and hardway winners stay up;
   everything else returns.
+- **The version header admits the past and refuses the future.** It refused
+  both, which faced the next release with a choice between turning away every
+  file on every user's disk and never bumping the number at all — which is
+  how a version gate becomes decorative. Every grammar change so far has been
+  additive, and additive changes leave old files meaning what they meant. A
+  breaking one bumps the number, and old files are migrated or refused
+  deliberately.
+- **A skipped decision is a decision where no rule fires**, and fire counts
+  are the dead-rule diagnostic rather than an implementation detail. The
+  compiled player's placement-only skip — which could never engage, because
+  nothing on that path cleared the flag it tested — is removed rather than
+  repaired: it would have quietly halved the count beside a rule that was
+  working perfectly well, on the simplest strategies, which are the ones
+  already fast enough.
 - **The two proofs the language leans on now run in CI.** The
   ten-thousand-seed equivalence battery — the hand-written player and the
   compiled one pinned to each other on identical dice — and the performance

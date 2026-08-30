@@ -90,16 +90,22 @@ impl Player for Compiled<'_> {
     type Feat = AllFeatures;
 
     #[inline]
-    fn wants_decision<O: RollObserver>(&self, s: &Session<'_, O, AllFeatures>) -> bool {
-        // A rule may want to act on any roll, so by default there is no
-        // skipping the decision. A program the compiler proved depends only
-        // on the point, the layout, and the bankroll is the exception: until
-        // a resolution moves one of those, it would decide the same thing.
-        if self.program.placement_only {
-            s.needs_placement || self.program.bets_one_roll
-        } else {
-            true
-        }
+    fn wants_decision<O: RollObserver>(&self, _s: &Session<'_, O, AllFeatures>) -> bool {
+        // Always. A rule may want to act on any roll, and the one exception
+        // the compiler could prove — a program reading nothing but the point,
+        // the layout and the bankroll, which would decide the same thing
+        // until a resolution moved one of them — is not taken.
+        //
+        // It was written, documented, and dead: nothing on this path ever
+        // cleared the flag it tested. Making it live turned out to cost more
+        // than it saves. A skipped decision is a decision where no rule
+        // fires, and fire counts are not an implementation detail here —
+        // they are the dead-rule diagnostic the whole Bench is built on, and
+        // §9 leans on. An optimization that quietly halves the count beside
+        // a rule that is working perfectly well would be Principle 4 broken
+        // by a performance trick, on the simplest strategies, which are the
+        // ones already fast enough.
+        true
     }
 
     fn init_state(&self, st: &mut crate::strategy::StratState) {
