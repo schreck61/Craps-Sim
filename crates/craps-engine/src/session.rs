@@ -988,7 +988,16 @@ mod bench {
     /// is really a difference in work done, which is how this benchmark read
     /// before it was fixed.
     ///
-    ///   cargo test --release -p craps-engine -- --ignored bench_compiled --nocapture
+    /// **Run it alone.** The whole ignored tier at once puts the
+    /// ten-thousand-seed equivalence proof and the throughput tests on every
+    /// core beside this, and under that contention the same built-in
+    /// configuration has read anywhere from 22 to 71 ns/roll — three times
+    /// the spread of what this is measuring. Taking the minimum of seven
+    /// reps survives a spike but not sustained load, and readings taken that
+    /// way have been mistaken for a regression. One test, one process:
+    ///
+    ///   cargo test --release -p craps-engine -- --ignored --nocapture \
+    ///       --test-threads=1 bench_compiled
     #[test]
     #[ignore]
     fn bench_compiled() {

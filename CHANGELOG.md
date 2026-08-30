@@ -144,6 +144,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repaired: it would have quietly halved the count beside a rule that was
   working perfectly well, on the simplest strategies, which are the ones
   already fast enough.
+- **The compiled player got faster where it was slowest.** A bare
+  `point != 0` — the commonest single condition in the language, and four
+  rules of the loaded benchmark — had no arm in the guard fuser and compiled
+  to general stack code beside a fast-path variant nothing constructed. It
+  fuses into one test now: measured as a paired A/B on an idle machine, the
+  loaded configurations run ~10% faster per roll (219 → 197 ns, 228 → 205 ns)
+  and the small ones are flat. The built-in player's figures do not move,
+  which is the number that matters — the checkbox player pays nothing for a
+  language it does not speak.
 - **The two proofs the language leans on now run in CI.** The
   ten-thousand-seed equivalence battery — the hand-written player and the
   compiled one pinned to each other on identical dice — and the performance

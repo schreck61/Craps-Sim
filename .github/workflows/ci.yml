@@ -84,9 +84,12 @@ jobs:
           cargo test --locked --release -p craps-engine -- --ignored --nocapture \
             deep_equivalence_compiled_matches_builtin
       - name: Performance budget
+        # Its own step, filtered to the one test, single-threaded: the ratios
+        # are meaningless measured beside the equivalence proof above, which
+        # would otherwise be on every core at the same time.
         run: |
           cargo test --locked --release -p craps-engine -- --ignored --nocapture \
-            bench_compiled
+            --test-threads=1 bench_compiled
 
   snapshots:
     # Regenerates the headless pixel snapshots (UPDATE_SNAPSHOTS=1 writes

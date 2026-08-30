@@ -1159,16 +1159,25 @@ The engine's whole premise is hundreds of millions of rolls per second. A
 strategy interpreter in the inner loop is the one thing in this document that
 could break the app.
 
-**Measured, and the budget corrected.** The figures below are
-nanoseconds per simulated roll, single-threaded, compiled strategy against
-hand-written player on identical dice (`bench_compiled`):
+**Measured, and the budget corrected.** The figures below are nanoseconds
+per simulated roll, single-threaded, compiled strategy against hand-written
+player on identical dice (`bench_compiled`), median of three runs.
+
+*Measure it alone.* `bench_compiled` is `#[ignore]`, and running the whole
+ignored tier at once puts the ten-thousand-seed equivalence proof and the
+throughput tests on every core beside it. Under that contention the same
+built-in pass-line configuration has read anywhere from 22 to 71 ns/roll —
+three times the spread of anything this table is trying to measure — and the
+ratios drift with it. Readings taken that way are not comparable to these,
+and were mistaken for a regression once. One test, one process, nothing else
+running.
 
 | configuration | rules | built-in | compiled | ratio |
 |---|---|---|---|---|
-| pass line | 1 | 22.09 ns | 29.66 ns | 1.34× |
-| 3-point molly | 9 | 34.97 ns | 76.64 ns | 2.19× |
-| loaded table | 27 | 54.49 ns | 199.16 ns | 3.65× |
-| loaded + full press | 27 | 60.88 ns | 208.64 ns | 3.43× |
+| pass line | 1 | 22.0 ns | 29.0 ns | 1.32× |
+| 3-point molly | 9 | 34.9 ns | 75.7 ns | 2.15× |
+| loaded table | 27 | 54.6 ns | 197.1 ns | 3.61× |
+| loaded + full press | 27 | 60.3 ns | 204.9 ns | 3.40× |
 
 Cost scales with rule count at roughly 5 ns per rule per roll, which is what
 a dispatching interpreter costs and is not going to become free. The 1.15×
@@ -1178,17 +1187,38 @@ implied a plan the numbers do not support.
 
 P2c raised the loaded figures from 182 to 215 ns — an 18% tax on interpreted
 strategies, paid for the actions that make the language worth having. The
-built-in player pays none of it. They then came back down to 199, and not by
-anyone optimizing for it: a bare `point != 0` — the commonest single condition
-in the language, and four rules of the loaded configuration — had no arm in
-the guard fuser and compiled to general stack code beside a fast-path variant
-that sat unreachable. It now fuses into one test, like every other guard shape
-real rules take, and the loaded ratio fell from 3.85× to 3.65×.
+built-in player pays none of it.
+
+They then came back down, and not by anyone optimizing for it. A bare
+`point != 0` — the commonest single condition in the language, and four rules
+of the loaded configuration — had no arm in the guard fuser and compiled to
+general stack code beside a fast-path variant that sat unreachable. It fuses
+into one test now, like every other guard shape real rules take. Measured as
+a paired A/B against the revision before this one's work began, alone on an
+idle machine, three runs each:
+
+| configuration | before | after | |
+|---|---|---|---|
+| pass line | 29.8 ns | 29.0 ns | −2.7% |
+| 3-point molly | 75.6 ns | 75.7 ns | flat |
+| loaded table | 219.3 ns | 197.1 ns | −10.1% |
+| loaded + full press | 228.4 ns | 204.9 ns | −10.3% |
+
+The built-in player's four figures do not move, which is the result that
+matters most: the checkbox player pays nothing for a language it does not
+speak, and that is the claim S2's feature masks exist to keep true.
+
+The work that landed alongside the fusion — the table-limit checks on named
+amounts, the stream a press now writes to, the refusal that says which verb
+it refused — is not free, and the flat molly line is where it shows: the
+small configurations gained back roughly what they spent. The loaded ones
+kept the fusion's win because they carry the guards it recognizes.
 
 **Budget, corrected again.** This section carried *"≤ 2× for a strategy of up
 to ten rules, and ≤ 4.5× for one that covers the felt."* The second half held.
 The first was never true of the numbers printed directly above it — the
-3-point molly is nine rules and has measured 2.16×–2.19× since it was first
+3-point molly is nine rules, and measured alone it reads 2.15× both before
+and after the work of this revision, as it has since it was first
 benchmarked. A budget its own table contradicts is worse than no budget,
 because it reads as a gate somebody is holding.
 
