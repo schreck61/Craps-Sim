@@ -5,6 +5,97 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2026-08-31
+
+### Fixed
+
+Six readouts described the bet rail while a strategy held the dice. None of
+them failed — the rail is a real player with real numbers, so each one
+answered confidently about somebody who was not playing.
+
+- **The wealth fan drew one flat line at the buy-in.** It traced the bet
+  rail, and a strategy run leaves the rail with no live bets of its own, so
+  what it drew was a player who never bets: 200 of 200 traced sessions dead
+  flat. The engine had no strategy-aware trace at all. `trace_program_wealth`
+  is the compiled-player twin of `trace_wealth`, seeded and constructed
+  exactly as `run_program_session` so a traced session is the session the
+  sweep ran, and the fan now traces whoever is playing.
+
+- **The house edge went missing, then reported the pass line's.** A strategy
+  has no closed form — its stakes are conditional, so there is no flat-rate
+  blend to solve — and the closed-form call returns nothing without a
+  selection. The first fix guarded on whether the rail had bets ticked, which
+  is the wrong question: the rail keeps its selection while a strategy plays,
+  because switching to Rules must not discard what was on Checkboxes. So with
+  the default pass line still on, Findings reported −1.41% per resolved
+  dollar — the pass line's edge — for a run the pass line took no part in.
+  `SimConfig::closed_form_applies` now names the condition once, and the edge
+  is measured instead where no closed form exists: drift over handle, labelled
+  as measured and over how many sessions, since a counted edge carries
+  sampling error and a solved one does not.
+
+- **The House Line asserted a strategy broke even.** Guarded on flat stakes
+  and no quit target, but not on there being a rail at all. With none the
+  drift solves to zero and the line was drawn at exactly the buy-in and
+  called an expectation; with the rail left as Checkboxes had it, it was
+  drawn at the *rail's* expectation, which is worse for looking like a real
+  number. It also fed the caption beneath it, which then reported the distance
+  from the strategy's mean to a line belonging to a player who never bet.
+
+- **The Anchor offered thirteen pressing systems to a strategy that declares
+  its own.** Choosing one re-simulated the empty rail under a progression
+  nobody had picked and drew it as this strategy pressed differently. It is
+  hidden when a strategy is playing.
+
+- **The histogram was captioned "Flat (no press)" over every strategy.** That
+  was the rail's progression, Flat by default. `Program::pressing_label`
+  answers from the strategy's own `press` declarations instead, and tells
+  apart the three cases worth distinguishing: none declared, one system (and
+  whether it covers every stream or only some bets), or several, which no
+  single phrase should pretend to summarize. It reports declarations only —
+  a strategy can also press from its rules, and no phrase over a histogram
+  summarizes a conditional ladder honestly — so the flat case reads "no press
+  declared" rather than "no press", which would be false of exactly that
+  strategy.
+
+- **The status bar said "no bets selected" when a strategy was playing.**
+  That strategy has an edge; it simply is not solvable from the rail. It now
+  says so and points at the measured one.
+
+### Changed
+
+- **The bankroll, the table minimums and the house rules are on the Rules tab
+  too.** Picking Rules chose the strategy and hid all fifteen run-scope
+  settings, because they hung off the bet rail's branch of the same
+  conditional. None of them belongs to the rail — a strategy is simulated
+  against exactly the same bankroll and the same minimums, and
+  `place_the_point` is a table rule deciding what a strategy may legally bet
+  that was reachable only while the strategy was not playing. The cost was
+  not a missing control but a forced trip across the player switch to reach
+  it, which leaves you on the tab where Run means the rail plays.
+
+- **The compiled-strategy performance tripwires are set from a distribution
+  rather than from the last reading.** They fired on a commit that added a
+  PDF and changed no engine code — the second time the gate went red on a
+  machine rather than on a change. Six CI runs over one unchanged engine read
+  3.72× to 4.76× on the loaded configurations against a 4.5× tripwire, with
+  the small-strategy one six percent from firing next. The ratio is not
+  machine-invariant and no number of repetitions makes it so: the runner's own
+  speed moves 35% across those runs, and the interpreted side loses more to a
+  weak cache than a straight line does, so the ratio tracks the machine. Both
+  now sit about four standard deviations above the mean, which leaves a
+  catastrophe detector — an interpreter three times slower still trips it —
+  and gives up detecting drift of a few percent, which nothing measured on a
+  shared runner can do honestly. The table is published to the run summary on
+  every run so the trend stays readable.
+
+### Known gaps
+
+- Only Findings and Replay were audited for this. Explorer and Duel read the
+  same configuration and have not been checked against a strategy run.
+- `Program::pressing_label` reports `press` declarations, not presses driven
+  by rules.
+
 ## [0.5.1] - 2026-08-30
 
 ### Fixed
