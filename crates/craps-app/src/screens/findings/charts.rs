@@ -227,6 +227,20 @@ pub fn horizon_chart(
     // is the player always hears yes. That is how this line came to report
     // the pass line's -1.41% for a run the pass line took no part in.
     let strategy_playing = p.strategy.is_some();
+    // What the chart is allowed to call the pressing.
+    //
+    // `sel.progression` is the bet rail's, and the rail is not playing, so
+    // it captioned every strategy chart "Flat (no press)" -- true of the
+    // rail, unknowable from it, and false the moment a strategy declares a
+    // press. The strategy knows; ask it, and only when the compiled program
+    // in hand is the one that produced these results.
+    let strategy_pressing: Option<String> = strategy_playing
+        .then(|| {
+            let ran = p.strategy.as_ref()?;
+            let prog = app.live_program()?;
+            (crate::config::StrategyRef::of(&prog).hash == ran.hash).then(|| prog.pressing_label())
+        })
+        .flatten();
     let pinned_edge = p
         .closed_form_applies()
         .then(|| craps_engine::blended_edge(&p.sel, &p.rules(), focused_min_cents))
@@ -442,6 +456,14 @@ pub fn horizon_chart(
         let brush_sorted = (mi == focused && variant.is_none())
             .then(|| m.sorted.as_ref().map(|sv| sv.finals.clone()))
             .flatten();
+        // A strategy has no rail progression to name. Name what it
+        // declares when the program is identifiable, and say plainly that
+        // the pressing is its own when it is not -- never the rail's.
+        let press_phrase: String = match (&strategy_pressing, strategy_playing) {
+            (Some(label), _) => label.clone(),
+            (None, true) => "pressing as the strategy declares".to_owned(),
+            (None, false) => display_prog.label().to_owned(),
+        };
         let title = if display_prog != run_prog && variant.is_none() {
             format!(
                 "Ending bankroll — {} table · {} (still {})",
@@ -453,7 +475,7 @@ pub fn horizon_chart(
             format!(
                 "Ending bankroll — {} table · {}",
                 numerals::money_text(m.min_cents, false),
-                display_prog.label()
+                press_phrase
             )
         };
         let frame = ChartFrame::new(id, &title)

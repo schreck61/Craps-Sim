@@ -243,6 +243,41 @@ impl Program {
     pub fn cost_bound(&self) -> usize {
         self.ops.len()
     }
+
+    /// How this strategy presses, in one phrase, for a caption.
+    ///
+    /// There may be no single answer: pressing is declared per bet stream,
+    /// so a strategy can Martingale its don't pass and leave everything else
+    /// flat. Three cases are worth telling apart, and the middle one is why
+    /// this exists at all — a chart captioned "Flat (no press)" over a
+    /// strategy that presses something is simply false, and it read that way
+    /// because the caption was asking the bet rail, which is not playing.
+    ///
+    /// This reports only what the `press` declarations say. A strategy can
+    /// also press from its rules, with `press place 6 by 1 unit`, and no
+    /// phrase over a histogram could summarize a conditional ladder
+    /// honestly — so the wording says which question it answered.
+    pub fn pressing_label(&self) -> String {
+        use crate::bets::Progression;
+        let mut seen: Vec<Progression> = Vec::new();
+        for p in self.progressions.iter() {
+            if *p != Progression::Flat && !seen.contains(p) {
+                seen.push(*p);
+            }
+        }
+        match seen.len() {
+            0 => "Flat (no press declared)".to_owned(),
+            1 => {
+                let only = seen[0];
+                if self.progressions.iter().all(|p| *p == only) {
+                    only.label().to_owned()
+                } else {
+                    format!("{} on some bets", only.label())
+                }
+            }
+            n => format!("{n} pressing systems, by bet"),
+        }
+    }
 }
 
 /// Per-session strategy memory. Fixed size, stack-allocated, zeroed at
@@ -734,5 +769,48 @@ mod size_tests {
         }
         assert_eq!(apply_bin(BinOp::Div, i64::MIN, -1), i64::MAX);
         assert_eq!(apply_bin(BinOp::Div, 7, 0), 0);
+    }
+
+    /// The caption over a strategy's histogram must not be the bet rail's.
+    ///
+    /// It was: `sel.progression`, Flat by default, so every strategy chart
+    /// read "Flat (no press)" however the strategy pressed. The middle two
+    /// cases are the ones that made it a lie.
+    #[test]
+    fn pressing_label_says_what_the_strategy_declares() {
+        use crate::strategy::{compile, parse};
+        let label = |src: &str| compile(&parse(src).unwrap()).unwrap().pressing_label();
+
+        assert_eq!(
+            label("strategy \"A\" language 1\n\non come-out:\n    bet pass\n"),
+            "Flat (no press declared)"
+        );
+        assert_eq!(
+            label("strategy \"B\" language 1\n\npress martingale\n\non come-out:\n    bet pass\n"),
+            "Martingale"
+        );
+        assert_eq!(
+            label(
+                "strategy \"C\" language 1\n\npress martingale for dont pass\n\non come-out:\n    bet dont pass\n"
+            ),
+            "Martingale on some bets"
+        );
+        assert_eq!(
+            label(
+                "strategy \"D\" language 1\n\npress martingale for dont pass\npress half-press for hard 6\n\non come-out:\n    bet dont pass\n\non roll when point != 0:\n    bet hard 6\n"
+            ),
+            "2 pressing systems, by bet"
+        );
+
+        // The limitation, pinned so the wording cannot drift away from it:
+        // a rule-driven ladder is pressing, and no `press` declaration says
+        // so. "no press declared" is therefore the only honest phrase here
+        // -- "no press" would be false.
+        assert_eq!(
+            label(
+                "strategy \"E\" language 1\n\non roll when point != 0:\n    bet place 6\n\non win of place 6:\n    press place 6 by 1 unit\n"
+            ),
+            "Flat (no press declared)"
+        );
     }
 }
