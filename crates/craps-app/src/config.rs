@@ -36,6 +36,27 @@ pub struct StrategyRef {
     pub hash: u32,
 }
 
+impl SimConfig {
+    /// Whether a closed-form expectation exists for whoever is playing.
+    ///
+    /// Two conditions, and the first is the one that keeps being forgotten.
+    /// A strategy has no closed form: its stakes are conditional, so there
+    /// is no flat-rate blend to solve. And the rail keeps its selection
+    /// while a strategy plays -- switching back to Checkboxes must not lose
+    /// what was ticked there -- so `sel.any_selected()` is *true* during a
+    /// strategy run and cannot be used to detect one. Guarding on the rail
+    /// alone is how the Findings screen came to report the pass line's
+    /// -1.41% for a run the pass line took no part in.
+    pub fn closed_form_applies(&self) -> bool {
+        self.strategy.is_none() && self.sel.any_selected()
+    }
+
+    /// Whether the bet rail is the live player.
+    pub fn rail_is_player(&self) -> bool {
+        self.strategy.is_none()
+    }
+}
+
 impl StrategyRef {
     /// The hash as the sentence writes it.
     pub fn short(&self) -> String {
@@ -545,5 +566,43 @@ mod tests {
         assert!(c.validate().is_ok());
         c.budget_cents = 100; // $1 can't cover a $5 line bet
         assert!(c.validate().unwrap_err().contains("can't cover"));
+    }
+
+    /// The rail keeps its selection while a strategy plays, so a guard that
+    /// asks the rail whether it is the player always hears yes.
+    ///
+    /// This is the case the first fix for it got wrong: it guarded on
+    /// `sel.any_selected()`, reasoning that a strategy run leaves the rail
+    /// empty. It does not -- switching to Rules must not discard what was
+    /// ticked on Checkboxes -- so with the default pass line still on, the
+    /// Findings screen reported the pass line's closed-form edge for a run
+    /// the pass line took no part in.
+    #[test]
+    fn a_strategy_has_no_closed_form_however_the_rail_is_left() {
+        let mut c = SimConfig::default();
+        c.sel.pass_line = true;
+        assert!(c.sel.any_selected());
+        assert!(c.closed_form_applies(), "the rail alone does have one");
+        assert!(c.rail_is_player());
+
+        // The strategy takes over; the rail keeps its ticks.
+        c.strategy = Some(StrategyRef {
+            name: "anything".to_owned(),
+            hash: 0xab08_f425,
+        });
+        assert!(c.sel.any_selected(), "the rail is not cleared, by design");
+        assert!(!c.rail_is_player());
+        assert!(
+            !c.closed_form_applies(),
+            "a populated rail must not lend its closed form to a strategy run"
+        );
+
+        // And an empty rail with no strategy has none either -- nobody bets.
+        c.strategy = None;
+        c.sel = BetSelection {
+            pass_line: false,
+            ..Default::default()
+        };
+        assert!(!c.closed_form_applies());
     }
 }

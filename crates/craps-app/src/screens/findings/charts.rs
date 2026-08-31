@@ -222,8 +222,15 @@ pub fn horizon_chart(
     // run counted. The label says which one it is, because a measured edge
     // carries sampling error and a derived one does not.
     let focused_min_cents = st.mins[focused].min_cents;
+    // Not `sel.any_selected()`: the rail keeps whatever was ticked on the
+    // Checkboxes tab while a strategy plays, so asking the rail whether it
+    // is the player always hears yes. That is how this line came to report
+    // the pass line's -1.41% for a run the pass line took no part in.
     let strategy_playing = p.strategy.is_some();
-    let pinned_edge = craps_engine::blended_edge(&p.sel, &p.rules(), focused_min_cents);
+    let pinned_edge = p
+        .closed_form_applies()
+        .then(|| craps_engine::blended_edge(&p.sel, &p.rules(), focused_min_cents))
+        .flatten();
 
     for mi in panels {
         let m = &st.mins[mi];
@@ -321,14 +328,17 @@ pub fn horizon_chart(
 
         // The House Line draws only where the engine computes a closed form:
         // flat stakes, no quit target (spec scope guard).
-        // `any_selected()` is the load-bearing half: with a strategy
-        // playing the rail is empty, the closed-form drift solves to zero,
-        // and the line would be drawn at exactly the buy-in and labelled an
-        // expectation -- asserting this strategy breaks even. It also fed
-        // the gap caption below, which then reported the strategy's real
-        // loss as a gap from a line that meant nothing.
+        // `closed_form_applies()` is the load-bearing half. With a
+        // strategy playing this line means nothing either way: on an empty
+        // rail the drift solves to zero and it is drawn at the buy-in,
+        // asserting the strategy breaks even; on a rail left as the
+        // Checkboxes tab had it, it is drawn at the *rail's* expectation,
+        // which is worse -- it looks like a real number computed for this
+        // run. It also fed the gap caption below, which then reported the
+        // distance from the strategy's mean to a line belonging to a player
+        // who never bet.
         let flat_no_quit =
-            display_prog == Progression::Flat && p.quit_mult.is_none() && p.sel.any_selected();
+            display_prog == Progression::Flat && p.quit_mult.is_none() && p.closed_form_applies();
         let house_line = flat_no_quit.then(|| {
             let drift = flat_drift_per_roll_cents(&p.sel, &p.rules(), m.min_cents);
             let expected = budget as f64 + drift * p.horizon_rolls() as f64;

@@ -89,7 +89,9 @@ pub fn ghost_panel_with_house_line(
         );
     }
     let cfg = &app.cfg;
-    if cfg.sel.progression == Progression::Flat && cfg.quit_mult.is_none() && cfg.sel.any_selected()
+    if cfg.sel.progression == Progression::Flat
+        && cfg.quit_mult.is_none()
+        && cfg.closed_form_applies()
     {
         let min = cfg
             .table_mins_cents

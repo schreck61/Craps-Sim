@@ -900,7 +900,11 @@ impl App {
             .copied()
             .unwrap_or(1000);
         let rules = self.cfg.rules();
-        let edge = craps_engine::blended_edge(&self.cfg.sel, &rules, min);
+        let edge = self
+            .cfg
+            .closed_form_applies()
+            .then(|| craps_engine::blended_edge(&self.cfg.sel, &rules, min))
+            .flatten();
         let mono11 = FontId::new(type_scale::CAPTION, theme::mono());
         ui.horizontal(|ui| {
             ui.label(
@@ -931,11 +935,16 @@ impl App {
                     );
                 }
                 None => {
-                    ui.label(
-                        RichText::new("EDGE — (no bets selected)")
-                            .font(mono11.clone())
-                            .color(t.amber),
-                    );
+                    // Which "no edge" this is matters: a strategy has one,
+                    // it just is not solvable from the rail. Findings
+                    // measures it; saying "no bets selected" here would be
+                    // false in the one case the rail is not the player.
+                    let why = if self.cfg.rail_is_player() {
+                        "EDGE — (no bets selected)"
+                    } else {
+                        "EDGE — (rules player: no closed form; see Findings)"
+                    };
+                    ui.label(RichText::new(why).font(mono11.clone()).color(t.amber));
                 }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
