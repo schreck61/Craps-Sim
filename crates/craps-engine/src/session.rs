@@ -1056,41 +1056,52 @@ mod bench {
                 "{name:<22} {builtin_ns:>9.2} ns/r {compiled_ns:>9.2} ns/r {ratio:>7.2}x  ({rules_n} rules)"
             );
         }
-        println!("\nworst ratio {worst:.2}x (tripwire: 4.5x)");
-        println!("worst at ten rules or fewer {worst_small:.2}x (tripwire: 3.0x)");
-        // A regression tripwire, not a target, set with headroom on
-        // purpose: cost scales with rule count at roughly 5 ns per rule per
-        // roll, the loaded configurations carry 29 rules and sit at 3.9x,
-        // and a tripwire four percent above the reading fires on noise. See
-        // STRATEGY_DSL.md Part II §3 for why the 1.15x this once asserted
-        // was the wrong number.
+        println!("\nworst ratio {worst:.2}x (tripwire: 6.0x)");
+        println!("worst at ten rules or fewer {worst_small:.2}x (tripwire: 3.5x)");
+        // These two numbers are set from a distribution, not from a reading,
+        // and that is the whole point of them.
+        //
+        // The ratio is not machine-invariant. The interpreted side is a walk
+        // over a flat instruction stream and loses more to a weak cache and
+        // branch predictor than the hand-written player's straight line
+        // does, so a slower or busier machine does not merely make both
+        // sides slower — it makes the ratio worse. Six CI runs over one
+        // unchanged engine read:
+        //
+        //     worst  3.72  3.75  3.85  4.17  4.49  4.76   (mean 4.12, sd .41)
+        //     small  2.40  2.41  2.47  2.57  2.67  2.83   (mean 2.56, sd .16)
+        //
+        // The runner's own speed moves 35% across those runs — the built-in
+        // player alone reads 76 to 103 ns/roll — and the ratio tracks it.
+        // Fastest-of-REPS already removes the noise inside a run; this is
+        // the spread between machines, and no number of reps touches it.
+        //
+        // So both tripwires are set about four standard deviations above the
+        // mean, which is roughly a quarter above the worst reading yet seen.
+        // What survives is a catastrophe detector: an interpreter that got
+        // three times slower still trips it, while the fleet's slowest
+        // machine does not. What it deliberately no longer detects is drift
+        // of a few percent, because nothing measured on a shared runner can
+        // detect that honestly. Drift is caught by a paired A/B on one
+        // machine before the change lands, which is the only method here
+        // that has ever produced a true reading.
+        //
+        // The history is the argument. This asserted 1.15x (see
+        // STRATEGY_DSL.md Part II §3), then 2.5x calibrated on a laptop,
+        // then 4.5x/3.0x calibrated on a single CI observation. It has now
+        // fired twice, both times on a commit that changed no engine code at
+        // all — the second on a commit that added nothing but a PDF. Two
+        // false positives, zero true ones. A gate calibrated to the worst
+        // sample seen so far will always be beaten by the next machine; only
+        // a gate calibrated to the spread will not.
         assert!(
-            worst <= 4.5,
-            "compiled strategies cost {worst:.2}x the built-in player; the tripwire is 4.5x"
+            worst <= 6.0,
+            "compiled strategies cost {worst:.2}x the built-in player; the tripwire is 6.0x"
         );
-        // 3.0x, and the number is about hardware rather than about the
-        // interpreter.
-        //
-        // The ratio is not machine-invariant, which is the thing to know
-        // here. The same binary reads 2.14x on the development machine and
-        // 2.57x on a CI runner: the runner is about 1.6x slower in absolute
-        // terms, and the interpreted side — a walk over a flat instruction
-        // stream — loses more to a weaker cache and branch predictor than
-        // the hand-written player's straight line does. Both tripwires are
-        // therefore set against the slowest hardware this has been measured
-        // on, with the same headroom over it (CI reads 2.57x and 3.85x).
-        //
-        // This was 2.5x, calibrated on one machine, and it failed the first
-        // time it ran anywhere else — which is what running it was for. It
-        // is not loosened because the code got slower: a paired A/B against
-        // the revision before this work has the compiled player 9% *faster*
-        // on the loaded configurations and about 1% slower on the small
-        // ones. Do not re-tighten to a local reading without checking what
-        // CI sees, or main goes red on a machine rather than on a change.
         assert!(
-            worst_small <= 3.0,
+            worst_small <= 3.5,
             "a strategy of ten rules or fewer costs {worst_small:.2}x the built-in player; \
-             the tripwire is 3.0x"
+             the tripwire is 3.5x"
         );
     }
 

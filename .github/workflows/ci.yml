@@ -87,9 +87,31 @@ jobs:
         # Its own step, filtered to the one test, single-threaded: the ratios
         # are meaningless measured beside the equivalence proof above, which
         # would otherwise be on every core at the same time.
+        #
+        # The tripwires are deliberately loose — they catch a catastrophe,
+        # not drift, because the ratio moves with the runner and not only
+        # with the code (see the comment on bench_compiled). The table is
+        # therefore published to the run summary whether the step passes or
+        # fails, so the trend stays readable even when nothing trips.
         run: |
+          set -o pipefail
           cargo test --locked --release -p craps-engine -- --ignored --nocapture \
-            --test-threads=1 bench_compiled
+            --test-threads=1 bench_compiled 2>&1 | tee bench.txt
+        continue-on-error: false
+      - name: Publish the performance table
+        if: always()
+        run: |
+          {
+            echo '### Compiled strategy cost'
+            echo
+            echo 'Ratios move with the runner as well as the code; the'
+            echo 'tripwires only catch a catastrophe. Compare against the'
+            echo 'trend, not against a single run.'
+            echo
+            echo '```'
+            sed -n '/^config /,/^worst at ten rules/p' bench.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   snapshots:
     # Regenerates the headless pixel snapshots (UPDATE_SNAPSHOTS=1 writes
