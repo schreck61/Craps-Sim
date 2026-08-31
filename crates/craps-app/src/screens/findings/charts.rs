@@ -215,17 +215,30 @@ pub fn horizon_chart(
 
     // The invariant the Anchor displays: the per-dollar edge of this
     // selection, pinned through every progression swap.
+    //
+    // A strategy has no closed form -- its stakes are conditional, so there
+    // is no flat-rate blend to solve. The edge is still knowable, just
+    // measured rather than derived: drift over handle, both of which this
+    // run counted. The label says which one it is, because a measured edge
+    // carries sampling error and a derived one does not.
     let focused_min_cents = st.mins[focused].min_cents;
+    let strategy_playing = p.strategy.is_some();
     let pinned_edge = craps_engine::blended_edge(&p.sel, &p.rules(), focused_min_cents);
 
     for mi in panels {
         let m = &st.mins[mi];
 
         // The Anchor: hot-swap the progression on the focused panel only.
+        //
+        // Not for a strategy. `sel.progression` is the bet rail's pressing
+        // and the rail is not playing; a strategy declares its own, per bet
+        // stream, in its own text. Offering the swap here would re-simulate
+        // the rail with a progression nobody chose and draw the result as
+        // though it were this strategy pressed differently.
         let run_prog = p.sel.progression;
         let mut variant: Option<crate::store::AnchorVariant> = None;
         let mut display_prog = run_prog;
-        if mi == focused && !app.small_multiples && m.summary.is_some() {
+        if mi == focused && !app.small_multiples && m.summary.is_some() && !strategy_playing {
             let seed = st.provenance.seed;
             display_prog = super::anchor::control(app, ui, &p, seed, mi, run_prog);
             if display_prog != run_prog {
@@ -308,7 +321,14 @@ pub fn horizon_chart(
 
         // The House Line draws only where the engine computes a closed form:
         // flat stakes, no quit target (spec scope guard).
-        let flat_no_quit = display_prog == Progression::Flat && p.quit_mult.is_none();
+        // `any_selected()` is the load-bearing half: with a strategy
+        // playing the rail is empty, the closed-form drift solves to zero,
+        // and the line would be drawn at exactly the buy-in and labelled an
+        // expectation -- asserting this strategy breaks even. It also fed
+        // the gap caption below, which then reported the strategy's real
+        // loss as a gap from a line that meant nothing.
+        let flat_no_quit =
+            display_prog == Progression::Flat && p.quit_mult.is_none() && p.sel.any_selected();
         let house_line = flat_no_quit.then(|| {
             let drift = flat_drift_per_roll_cents(&p.sel, &p.rules(), m.min_cents);
             let expected = budget as f64 + drift * p.horizon_rolls() as f64;
@@ -328,11 +348,33 @@ pub fn horizon_chart(
 
         // The Anchor's two pins: the per-dollar edge label never moves;
         // the expected-dollar-loss pin drifts with the simulated handle.
+        // Measured edge for a strategy: drift over handle, from this run.
+        let measured_edge = (strategy_playing && n > 0)
+            .then(|| {
+                loss_pin_handle
+                    .filter(|h| *h > 0.0)
+                    .map(|h| (mean - budget as f64) / h)
+            })
+            .flatten();
         let pinned_edge_label = (mi == focused).then(|| {
-            pinned_edge
-                .map(|e| format!("house edge: {} per resolved dollar", numerals::edge_pct(e)))
-                .unwrap_or_default()
+            match (pinned_edge, measured_edge) {
+                (Some(e), _) => {
+                    format!("house edge: {} per resolved dollar", numerals::edge_pct(e))
+                }
+                // Said differently on purpose: this one was counted, not
+                // solved, so it moves with n and belongs to this run.
+                (None, Some(e)) => format!(
+                    "house edge: {} per resolved dollar — measured over {} sessions",
+                    numerals::edge_pct(e),
+                    numerals::compact_n(n)
+                ),
+                (None, None) => String::new(),
+            }
         });
+        // Only the closed form earns the expected-end pin. Drawing it from
+        // the measured edge would put it exactly on the simulated mean --
+        // budget + (mean - budget)/handle × handle -- a pin that restates
+        // the histogram it is pinned to and looks like corroboration.
         let loss_pin = match (pinned_edge, loss_pin_handle) {
             (Some(e), Some(h)) if mi == focused => Some((
                 budget as f64 + e * h,

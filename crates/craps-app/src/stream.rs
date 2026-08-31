@@ -82,6 +82,7 @@ pub fn start_main_run(
 ) -> MainRun {
     let store = Arc::new(Mutex::new(RunStore::new(cfg.clone(), seed)));
     let ctl = Arc::new(SweepCtl::default());
+    let fan_program = program.clone();
     let sweep_cfg = cfg.to_sweep(seed, program);
     let sessions = sweep_cfg.sessions;
     let n_mins = sweep_cfg.mins.len();
@@ -94,7 +95,7 @@ pub fn start_main_run(
     }
     {
         let store = store.clone();
-        thread::spawn(move || collect(store, rx, sessions, n_mins, confidence));
+        thread::spawn(move || collect(store, rx, sessions, n_mins, confidence, fan_program));
     }
 
     MainRun {
@@ -111,6 +112,7 @@ fn collect(
     sessions: u64,
     n_mins: usize,
     confidence: f64,
+    program: Option<Arc<craps_engine::strategy::Program>>,
 ) {
     let mut received = vec![0u64; n_mins];
     let mut finalized = vec![false; n_mins];
@@ -149,7 +151,7 @@ fn collect(
         }
         if received[mi] == sessions && !finalized[mi] {
             finalized[mi] = true;
-            finalize_min(&store, mi, confidence);
+            finalize_min(&store, mi, confidence, program.as_deref());
         }
     }
 
@@ -159,7 +161,7 @@ fn collect(
     for (mi, done) in finalized.iter_mut().enumerate() {
         if !*done && received[mi] > 0 {
             *done = true;
-            finalize_min(&store, mi, confidence);
+            finalize_min(&store, mi, confidence, program.as_deref());
         }
     }
     let total: u64 = received.iter().sum();
@@ -173,7 +175,12 @@ fn collect(
 
 /// Recompute one minimum's published summary from canonical columns. The
 /// expensive part (cloning + sorting) runs outside the store lock.
-fn finalize_min(store: &Mutex<RunStore>, mi: usize, confidence: f64) {
+fn finalize_min(
+    store: &Mutex<RunStore>,
+    mi: usize,
+    confidence: f64,
+    program: Option<&craps_engine::strategy::Program>,
+) {
     // Snapshot the columns under a brief lock (a memcpy, ~10 ms at 1.2M).
     let (cols, min_cents, is_focused, budget, horizon) = {
         let st = store.lock().unwrap();
@@ -206,7 +213,7 @@ fn finalize_min(store: &Mutex<RunStore>, mi: usize, confidence: f64) {
         let seed = p.seed;
         let total_n = p.sessions;
         drop(st);
-        build_fan(&cfg, seed, mi as u32, min_cents, total_n)
+        build_fan(&cfg, seed, mi as u32, min_cents, total_n, program)
     };
     // Install under a brief lock.
     let mut st = store.lock().unwrap();
@@ -246,8 +253,9 @@ fn build_fan(
     min_index: u32,
     min_cents: i64,
     total_n: u64,
+    program: Option<&craps_engine::strategy::Program>,
 ) -> crate::store::FanData {
-    use craps_engine::trace::trace_wealth;
+    use craps_engine::trace::{trace_program_wealth, trace_wealth};
     use craps_engine::{session_seed, SeedPhase};
     let horizon = cfg.horizon_rolls() as usize;
     let sample = 1_000u64.min(total_n.max(1));
@@ -257,16 +265,33 @@ fn build_fan(
     let mut wealths: Vec<Vec<i64>> = Vec::with_capacity(sample as usize);
     for k in 0..sample {
         let i = k * stride;
-        let (_, mut w) = trace_wealth(
-            &cfg.sel,
-            &rules,
-            min_cents,
-            cfg.budget_cents,
-            quit,
-            cfg.horizon_rolls(),
-            cfg.horizon_rolls(),
-            session_seed(seed, min_index, SeedPhase::Main, i),
-        );
+        // Whoever is actually playing gets traced. Tracing the bet rail
+        // while a strategy holds the dice does not approximate the strategy
+        // -- it draws a player who bets nothing, and the fan flatlines at
+        // the buy-in.
+        let sd = session_seed(seed, min_index, SeedPhase::Main, i);
+        let (_, mut w) = match program {
+            Some(p) => trace_program_wealth(
+                p,
+                &rules,
+                min_cents,
+                cfg.budget_cents,
+                quit,
+                cfg.horizon_rolls(),
+                cfg.horizon_rolls(),
+                sd,
+            ),
+            None => trace_wealth(
+                &cfg.sel,
+                &rules,
+                min_cents,
+                cfg.budget_cents,
+                quit,
+                cfg.horizon_rolls(),
+                cfg.horizon_rolls(),
+                sd,
+            ),
+        };
         let last = w.last().copied().unwrap_or(cfg.budget_cents);
         w.resize(horizon, last);
         wealths.push(w);

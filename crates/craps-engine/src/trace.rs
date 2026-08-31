@@ -337,6 +337,48 @@ pub fn trace_wealth(
     (outcome, obs.wealth)
 }
 
+/// [`trace_wealth`] for a compiled strategy.
+///
+/// The bet rail is not the player when a strategy is playing, and tracing
+/// `sel` in that case does not trace a poorer approximation of the strategy
+/// — it traces a player who bets nothing, whose wealth never moves off the
+/// buy-in. The wealth fan drew exactly that flat line until this existed.
+///
+/// Seeding and player construction match [`run_program_session`] exactly, so
+/// a traced session is the same session the sweep ran at that seed.
+///
+/// [`run_program_session`]: crate::run_program_session
+#[allow(clippy::too_many_arguments)]
+pub fn trace_program_wealth(
+    program: &crate::strategy::Program,
+    rules: &Rules,
+    table_min_cents: i64,
+    budget_cents: i64,
+    quit_target_cents: Option<i64>,
+    max_rolls: u64,
+    horizon_rolls: u64,
+    seed: u64,
+) -> (SessionOutcomes, Vec<i64>) {
+    let idle = BetSelection {
+        pass_line: false,
+        ..Default::default()
+    };
+    let cheapest = program.cheapest_stake(rules, table_min_cents);
+    let (outcome, obs) = crate::session::run_with_player(
+        &crate::strategy::player::Compiled::new(program, cheapest),
+        &idle,
+        rules,
+        table_min_cents,
+        budget_cents,
+        quit_target_cents,
+        max_rolls,
+        horizon_rolls,
+        seed,
+        WealthOnlyObserver::default(),
+    );
+    (outcome, obs.wealth)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,6 +406,64 @@ mod tests {
         sel.field = true;
         sel.progression = Progression::DAlembert;
         sel
+    }
+
+    /// A traced strategy must be the same session the sweep ran, and it must
+    /// actually move.
+    ///
+    /// The wealth fan drew a flat line at the buy-in for every strategy
+    /// because it traced `sel` — and with a strategy playing the rail is
+    /// empty, so what it drew was a player who never bets. The second half of
+    /// this test is the one that would have caught it: an empty rail is
+    /// provably constant, a strategy is provably not.
+    #[test]
+    fn traced_strategy_replays_the_sweeps_session_and_moves() {
+        use crate::run_program_session;
+        use crate::strategy::{compile, parse};
+
+        let src = r#"strategy "Fan probe" language 1
+
+on come-out:
+    bet pass
+
+on roll when point != 0 and up(pass):
+    bet odds on pass max
+"#;
+        let program = compile(&parse(src).unwrap()).unwrap();
+        let r = rules();
+        let mut moved = 0;
+        for seed in 0..200u64 {
+            let plain = run_program_session(&program, &r, 1000, 30_000, None, 2_000, 400, seed);
+            let (traced, wealth) =
+                trace_program_wealth(&program, &r, 1000, 30_000, None, 2_000, 400, seed);
+            assert_eq!(
+                plain.horizon.final_cents, traced.horizon.final_cents,
+                "traced strategy diverged from the untraced run at seed {seed}"
+            );
+            assert_eq!(plain.ruin.rolls, traced.ruin.rolls, "roll count at {seed}");
+            if wealth.iter().any(|&w| w != 30_000) {
+                moved += 1;
+            }
+        }
+        assert_eq!(
+            moved, 200,
+            "a betting strategy's wealth must not be constant"
+        );
+
+        // The other side of it: the empty rail really is the flat line, so
+        // the assertion above is testing the fix and not the dice.
+        let empty = BetSelection {
+            pass_line: false,
+            ..Default::default()
+        };
+        assert!(!empty.any_selected());
+        for seed in 0..50u64 {
+            let (_, w) = trace_wealth(&empty, &r, 1000, 30_000, None, 2_000, 400, seed);
+            assert!(
+                w.iter().all(|&x| x == 30_000),
+                "the empty rail is what used to be traced; it must be flat"
+            );
+        }
     }
 
     /// The trace must be an exact replay: outcome fields bit-identical to the
