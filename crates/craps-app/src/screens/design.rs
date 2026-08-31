@@ -50,10 +50,30 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             // Which surface builds the player is the same choice as which
             // player runs: picking Rules is picking the strategy, and there
             // is no second switch to disagree with this one.
+            //
+            // What the picker must NOT switch is everything else. The
+            // bankroll, which minimums to sweep, the session length and the
+            // house rules belong to the run, not to the player -- a
+            // strategy is simulated against exactly the same ones. Hanging
+            // them off the rail's branch stranded all fifteen on the
+            // Checkboxes tab, so restricting the sweep to a $15 table meant
+            // crossing the player switch to do it and standing on the far
+            // side of it, where the rail is the player and Run means
+            // something else. `place_the_point` was the sharpest case: a
+            // table rule that decides what a strategy may legally bet,
+            // reachable only while the strategy was not playing.
             player_picker(app, ui);
             ui.add_space(10.0);
             if app.use_strategy {
                 super::bench::authoring(app, ui);
+                ui.add_space(14.0);
+                ui.separator();
+                ui.add_space(10.0);
+                // Kept to one column's width: these sections are written for
+                // it, and a full-bleed drag row reads as a different control.
+                ui.columns(2, |cols| {
+                    right_column(app, &mut cols[0], focus);
+                });
             } else {
                 ui.columns(2, |cols| {
                     bet_rail(app, &mut cols[0], focus);
