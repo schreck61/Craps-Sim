@@ -38,7 +38,7 @@ pub use check::{against_table, check, Diagnostic};
 pub use compile::{compile, CompileError};
 pub use examples::EXAMPLES;
 pub use library::from_selection;
-pub use program::{Decision, Program, StratState};
+pub use program::{Decision, PressClass, Pressing, Program, StratState};
 pub use text::{
     bet_name, block_holds, parse, prune_blocks, render, render_rule, ParseError, LANGUAGE_VERSION,
 };

@@ -178,6 +178,159 @@ pub struct Decision {
 
 const _: () = assert!(STREAMS <= 32);
 
+/// How hard a strategy pushes a stake upward, as three classes a glyph can
+/// carry. Raising is the axis: a strategy that only ever regresses presses
+/// nothing, and the words alongside say the rest.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PressClass {
+    /// No stake is ever raised.
+    Flat,
+    /// Stakes are raised, but never in answer to that bet losing.
+    Positive,
+    /// A stake is raised after the bet it belongs to lost — the Martingale
+    /// shape, whatever the strategy is called.
+    Chase,
+}
+
+impl PressClass {
+    /// How a named pressing system classifies. One definition, so the
+    /// Explorer's glyph and a strategy's caption cannot disagree about
+    /// whether D'Alembert chases.
+    pub fn of(p: crate::bets::Progression) -> Self {
+        use crate::bets::Progression;
+        match p {
+            Progression::Flat => PressClass::Flat,
+            Progression::Martingale
+            | Progression::GrandMartingale
+            | Progression::DAlembert
+            | Progression::Fibonacci
+            | Progression::OscarsGrind => PressClass::Chase,
+            _ => PressClass::Positive,
+        }
+    }
+}
+
+/// How a strategy's stakes move: what it declares, and what its rules do.
+///
+/// Built by [`Program::pressing`]. Kept as data rather than a string so that
+/// callers which classify — the Explorer's dot ring — and callers which
+/// print can agree without one of them parsing the other's prose.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct Pressing {
+    /// Distinct non-flat systems declared with `press <system> [for <bet>]`,
+    /// first seen first.
+    pub declared: Vec<crate::bets::Progression>,
+    /// One declared system, on every bet stream.
+    pub declared_everywhere: bool,
+    /// A rule raises a stake with `press`.
+    pub rule_raises: bool,
+    /// A rule raises a stake under an `on loss of <bet>` trigger.
+    pub rule_raises_after_loss: bool,
+    /// A rule lowers a stake with `regress`.
+    pub rule_lowers: bool,
+}
+
+impl Pressing {
+    /// Nothing moves a stake, from either direction it could.
+    pub fn is_flat(&self) -> bool {
+        self.declared.is_empty() && !self.rule_raises && !self.rule_lowers
+    }
+
+    /// The class a glyph can carry.
+    ///
+    /// A declared system classifies by what it is. A rule-driven press
+    /// classifies by its trigger, which settles the one case worth settling:
+    /// raising after a loss is a chase. A press under any other trigger
+    /// could be either, and is reported as a positive progression rather
+    /// than guessed at — the label carries the words. The heaviest claim
+    /// wins when a strategy does several things.
+    pub fn class(&self) -> PressClass {
+        let mut worst = PressClass::Flat;
+        let mut raise = |c: PressClass| {
+            if matches!(c, PressClass::Chase)
+                || (matches!(c, PressClass::Positive) && matches!(worst, PressClass::Flat))
+            {
+                worst = c;
+            }
+        };
+        for p in &self.declared {
+            raise(PressClass::of(*p));
+        }
+        if self.rule_raises_after_loss {
+            raise(PressClass::Chase);
+        } else if self.rule_raises {
+            raise(PressClass::Positive);
+        }
+        worst
+    }
+
+    /// The phrase, for a caption with room for one.
+    pub fn label(&self) -> String {
+        let declared = match self.declared.len() {
+            0 => None,
+            1 if self.declared_everywhere => Some(self.declared[0].label().to_owned()),
+            1 => Some(format!("{} on some bets", self.declared[0].label())),
+            n => Some(format!("{n} pressing systems, by bet")),
+        };
+        let rules = match (self.rule_raises, self.rule_lowers) {
+            (false, false) => None,
+            (true, false) => Some("pressed by its rules"),
+            (false, true) => Some("regressed by its rules"),
+            (true, true) => Some("pressed and regressed by its rules"),
+        };
+        match (declared, rules) {
+            (None, None) => "Flat (no press)".to_owned(),
+            (Some(d), None) => d,
+            (None, Some(r)) => {
+                let mut s = r.to_owned();
+                s[..1].make_ascii_uppercase();
+                s
+            }
+            (Some(d), Some(r)) => format!("{d}, and {r}"),
+        }
+    }
+
+    /// The phrase for a column that fits about twenty characters. Says less
+    /// than [`Pressing::label`] and never anything different.
+    ///
+    /// Twenty is the Explorer's leaderboard column, sized for the longest
+    /// curated system name. The combined case is the only one that can
+    /// exceed it -- "Reverse D'Alembert" leaves no room for anything after
+    /// it -- so it drops to naming the two sources rather than being cut off
+    /// mid-word. The tooltip on the same row carries [`Pressing::label`].
+    pub fn short(&self) -> String {
+        const FITS: usize = 20;
+        let declared = match self.declared.len() {
+            0 => None,
+            1 if self.declared_everywhere => Some(self.declared[0].label().to_owned()),
+            1 => Some(format!("{} (some)", self.declared[0].label())),
+            n => Some(format!("{n} systems, by bet")),
+        };
+        let rules = match (self.rule_raises, self.rule_lowers) {
+            (false, false) => None,
+            (true, false) => Some("Pressed by rules"),
+            (false, true) => Some("Regressed by rules"),
+            (true, true) => Some("Press + regress"),
+        };
+        match (declared, rules) {
+            (None, None) => "Flat (no press)".to_owned(),
+            (Some(d), None) => d,
+            (None, Some(r)) => r.to_owned(),
+            (Some(_), Some(_)) if self.declared.len() > 1 => "Systems + rules".to_owned(),
+            (Some(d), Some(_)) => {
+                let bare = self.declared[0].label();
+                let both = format!("{bare} + rules");
+                if both.chars().count() <= FITS {
+                    both
+                } else {
+                    let _ = d;
+                    "Declared + rules".to_owned()
+                }
+            }
+        }
+    }
+}
+
 /// A compiled strategy: immutable, shareable, and the same bytes on every
 /// thread.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -244,51 +397,65 @@ impl Program {
         self.ops.len()
     }
 
-    /// The distinct non-flat pressing systems this strategy declares, in
-    /// stream order. Empty when it declares none.
+    /// How this strategy's stakes move, counting both places they can.
     ///
-    /// Callers that need to classify rather than print use this: the
-    /// Explorer's dot ring is a pressing class, and it drew the authored
-    /// strategy ringless -- its legend's word for "flat" -- because the row
-    /// carries a placeholder progression rather than a reading.
-    pub fn declared_pressing(&self) -> Vec<crate::bets::Progression> {
+    /// A strategy changes a stake in two ways and the language draws the
+    /// line itself: a `press <system>` declaration, applied per bet stream
+    /// where the bet resolves, and a `press` or `regress` statement inside a
+    /// rule, applied at a decision point. Reading only the declarations
+    /// called every rule-driven ladder flat, which is what this exists to
+    /// stop.
+    ///
+    /// The declarations come from the stream table. The rules come from the
+    /// compiled op stream: rules are laid out in order and each begins with
+    /// exactly one [`Op::Rule`], so one linear walk attributes every `Press`
+    /// and `Regress` to the trigger it sits under. `bet` is not a stake
+    /// movement -- it is idempotent on a bet already up -- so only those two
+    /// verbs count, and topping odds toward a target is not pressing the
+    /// flat it sits behind.
+    pub fn pressing(&self) -> Pressing {
         use crate::bets::Progression;
-        let mut seen: Vec<Progression> = Vec::new();
+        let mut declared: Vec<Progression> = Vec::new();
         for p in self.progressions.iter() {
-            if *p != Progression::Flat && !seen.contains(p) {
-                seen.push(*p);
+            if *p != Progression::Flat && !declared.contains(p) {
+                declared.push(*p);
             }
         }
-        seen
+        let declared_everywhere =
+            declared.len() == 1 && self.progressions.iter().all(|p| *p == declared[0]);
+
+        let mut rule_raises = false;
+        let mut rule_raises_after_loss = false;
+        let mut rule_lowers = false;
+        let mut trigger: Option<TriggerTest> = None;
+        for op in self.ops.iter() {
+            match op {
+                Op::Rule { trigger: t, .. } => trigger = Some(*t),
+                Op::Press(..) => {
+                    rule_raises = true;
+                    // Raising a stake because that bet just lost is the
+                    // Martingale shape, whatever the strategy calls itself.
+                    // It is the one class the trigger alone settles.
+                    if matches!(trigger, Some(TriggerTest::Loss(_))) {
+                        rule_raises_after_loss = true;
+                    }
+                }
+                Op::Regress(..) => rule_lowers = true,
+                _ => {}
+            }
+        }
+        Pressing {
+            declared,
+            declared_everywhere,
+            rule_raises,
+            rule_raises_after_loss,
+            rule_lowers,
+        }
     }
 
     /// How this strategy presses, in one phrase, for a caption.
-    ///
-    /// There may be no single answer: pressing is declared per bet stream,
-    /// so a strategy can Martingale its don't pass and leave everything else
-    /// flat. Three cases are worth telling apart, and the middle one is why
-    /// this exists at all — a chart captioned "Flat (no press)" over a
-    /// strategy that presses something is simply false, and it read that way
-    /// because the caption was asking the bet rail, which is not playing.
-    ///
-    /// This reports only what the `press` declarations say. A strategy can
-    /// also press from its rules, with `press place 6 by 1 unit`, and no
-    /// phrase over a histogram could summarize a conditional ladder
-    /// honestly — so the wording says which question it answered.
     pub fn pressing_label(&self) -> String {
-        let seen = self.declared_pressing();
-        match seen.len() {
-            0 => "Flat (no press declared)".to_owned(),
-            1 => {
-                let only = seen[0];
-                if self.progressions.iter().all(|p| *p == only) {
-                    only.label().to_owned()
-                } else {
-                    format!("{} on some bets", only.label())
-                }
-            }
-            n => format!("{n} pressing systems, by bet"),
-        }
+        self.pressing().label()
     }
 }
 
@@ -783,46 +950,103 @@ mod size_tests {
         assert_eq!(apply_bin(BinOp::Div, 7, 0), 0);
     }
 
-    /// The caption over a strategy's histogram must not be the bet rail's.
+    /// The caption over a strategy's histogram must not be the bet rail's,
+    /// and must count both places a stake can move.
     ///
-    /// It was: `sel.progression`, Flat by default, so every strategy chart
-    /// read "Flat (no press)" however the strategy pressed. The middle two
-    /// cases are the ones that made it a lie.
+    /// Reading only the `press` declarations called a rule-driven ladder
+    /// flat -- the gap 0.5.2 and 0.5.3 both recorded rather than closed. The
+    /// last three cases are the ones that were wrong.
     #[test]
-    fn pressing_label_says_what_the_strategy_declares() {
+    fn pressing_counts_declarations_and_rules() {
         use crate::strategy::{compile, parse};
-        let label = |src: &str| compile(&parse(src).unwrap()).unwrap().pressing_label();
+        let p = |src: &str| compile(&parse(src).unwrap()).unwrap().pressing();
 
-        assert_eq!(
-            label("strategy \"A\" language 1\n\non come-out:\n    bet pass\n"),
-            "Flat (no press declared)"
-        );
-        assert_eq!(
-            label("strategy \"B\" language 1\n\npress martingale\n\non come-out:\n    bet pass\n"),
-            "Martingale"
-        );
-        assert_eq!(
-            label(
-                "strategy \"C\" language 1\n\npress martingale for dont pass\n\non come-out:\n    bet dont pass\n"
-            ),
-            "Martingale on some bets"
-        );
-        assert_eq!(
-            label(
-                "strategy \"D\" language 1\n\npress martingale for dont pass\npress half-press for hard 6\n\non come-out:\n    bet dont pass\n\non roll when point != 0:\n    bet hard 6\n"
-            ),
-            "2 pressing systems, by bet"
-        );
+        let nothing = p("strategy \"A\" language 1\n\non come-out:\n    bet pass\n");
+        assert!(nothing.is_flat());
+        assert_eq!(nothing.label(), "Flat (no press)");
+        assert_eq!(nothing.class(), PressClass::Flat);
 
-        // The limitation, pinned so the wording cannot drift away from it:
-        // a rule-driven ladder is pressing, and no `press` declaration says
-        // so. "no press declared" is therefore the only honest phrase here
-        // -- "no press" would be false.
+        let everywhere =
+            p("strategy \"B\" language 1\n\npress martingale\n\non come-out:\n    bet pass\n");
+        assert_eq!(everywhere.label(), "Martingale");
+        assert_eq!(everywhere.class(), PressClass::Chase);
+
+        let some = p("strategy \"C\" language 1\n\npress half-press for hard 6\n\non roll when point != 0:\n    bet hard 6\n");
+        assert_eq!(some.label(), "Half press on some bets");
+        assert_eq!(some.class(), PressClass::Positive);
+
+        let two = p("strategy \"D\" language 1\n\npress martingale for dont pass\npress half-press for hard 6\n\non come-out:\n    bet dont pass\n\non roll when point != 0:\n    bet hard 6\n");
+        assert_eq!(two.label(), "2 pressing systems, by bet");
+        assert_eq!(two.class(), PressClass::Chase, "the heaviest claim wins");
+
+        // A ladder built from rules. This read "Flat (no press declared)".
+        let ladder = p("strategy \"E\" language 1\n\non roll when point != 0:\n    bet place 6\n\non win of place 6:\n    press place 6 by 1 unit\n");
+        assert!(!ladder.is_flat());
+        assert!(ladder.rule_raises && !ladder.rule_raises_after_loss);
+        assert_eq!(ladder.label(), "Pressed by its rules");
+        assert_eq!(ladder.class(), PressClass::Positive);
+
+        // Pressing after that bet lost is a chase, with nothing declared.
+        // The trigger settles it; nothing else in the program does.
+        let chaser = p("strategy \"F\" language 1\n\non come-out:\n    bet pass\n\non loss of pass:\n    press pass to $50\n");
+        assert!(chaser.rule_raises_after_loss);
+        assert_eq!(chaser.class(), PressClass::Chase);
+
+        // Lowering is a stake movement but it is not pressing, so the glyph
+        // stays flat while the words say what happens.
+        let down = p("strategy \"G\" language 1\n\non point-established:\n    bet place inside 2 units\n\non roll when hits(6) >= 2:\n    regress place inside to base\n");
+        assert!(!down.is_flat() && !down.rule_raises && down.rule_lowers);
+        assert_eq!(down.label(), "Regressed by its rules");
+        assert_eq!(down.class(), PressClass::Flat);
+
+        let both = p("strategy \"I\" language 1\n\npress martingale for dont pass\n\non come-out:\n    bet dont pass\n\non roll when point != 0:\n    bet place 6\n\non win of place 6:\n    press place 6 by 1 unit\n");
         assert_eq!(
-            label(
-                "strategy \"E\" language 1\n\non roll when point != 0:\n    bet place 6\n\non win of place 6:\n    press place 6 by 1 unit\n"
-            ),
-            "Flat (no press declared)"
+            both.label(),
+            "Martingale on some bets, and pressed by its rules"
         );
+        assert_eq!(both.short(), "Martingale + rules");
+    }
+
+    /// The Explorer's column fits about twenty characters, and a label cut
+    /// mid-word is worse than one that says less.
+    #[test]
+    fn the_short_form_fits_the_column() {
+        use crate::bets::Progression;
+        let long = Pressing {
+            declared: vec![Progression::ReverseDAlembert],
+            declared_everywhere: true,
+            rule_raises: true,
+            ..Default::default()
+        };
+        assert_eq!(long.short(), "Declared + rules");
+        let many = Pressing {
+            declared: vec![Progression::Martingale, Progression::HalfPress],
+            rule_lowers: true,
+            ..Default::default()
+        };
+        assert_eq!(many.short(), "Systems + rules");
+
+        // Every shape, bounded.
+        for pr in [
+            Pressing::default(),
+            long,
+            many,
+            Pressing {
+                rule_raises: true,
+                rule_lowers: true,
+                ..Default::default()
+            },
+            Pressing {
+                declared: vec![Progression::ReverseDAlembert],
+                declared_everywhere: true,
+                ..Default::default()
+            },
+        ] {
+            assert!(
+                pr.short().chars().count() <= 20,
+                "short() must fit the column: {:?}",
+                pr.short()
+            );
+        }
     }
 }

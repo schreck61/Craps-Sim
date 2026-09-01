@@ -8,6 +8,7 @@
 //! statistically tied with the leader live inside a drawn bracket. The
 //! footer never leaves: best of a losing field.
 
+use craps_engine::strategy::{PressClass, Pressing};
 use craps_engine::{blended_edge, explore_strategies, ExploreRow, Progression};
 use egui::{Align2, Color32, FontId, Pos2, RichText, Stroke};
 
@@ -321,8 +322,6 @@ fn strip_of_combos(
 ) {
     let t = app.theme.clone();
     let authored_press = authored_pressing(app, cfg);
-    let authored_declared: Option<Vec<Progression>> =
-        authored_program(app, cfg).map(|p| p.declared_pressing());
     let dt = ui.input(|i| i.stable_dt.min(0.1));
     let morph = app.motion.duration(crate::ui::motion::MORPH);
     let id = egui::Id::new(("strip", mi));
@@ -396,7 +395,7 @@ fn strip_of_combos(
                 let is_sel = selected.0 == Some(key) || selected.1 == Some(key);
                 // Shape by quit rule: circle none, square 1.5×, diamond 2×,
                 // triangle 3×; ring style by pressing class.
-                let ring = row_ring(r, authored_declared.as_deref());
+                let ring = row_ring(r, authored_press.as_ref());
                 draw_combo_dot(cx, Pos2::new(x, y), hue, r.quit_idx, ring, is_sel);
 
                 if let Some(p) = pointer {
@@ -418,7 +417,7 @@ fn strip_of_combos(
                     format!(
                         "{} · {} · {} — {}",
                         r.strategy,
-                        pressing_text(r, authored_press.as_deref()),
+                        pressing_text(r, authored_press.as_ref(), false),
                         quit_label(r.quit),
                         rank.fmt(r)
                     ),
@@ -513,9 +512,13 @@ fn draw_combo_dot(
 /// `authored` is the strategy's own answer when the compiled program in
 /// hand is the one that produced these rows; without it the honest word is
 /// that the pressing is written down elsewhere, never the pin.
-fn pressing_text(r: &ExploreRow, authored: Option<&str>) -> String {
+fn pressing_text(r: &ExploreRow, authored: Option<&Pressing>, brief: bool) -> String {
     if r.strategy_idx == craps_engine::AUTHORED_STRATEGY {
-        return authored.unwrap_or("as written").to_owned();
+        return match authored {
+            Some(p) if brief => p.short(),
+            Some(p) => p.label(),
+            None => "as written".to_owned(),
+        };
     }
     r.progression.label().to_owned()
 }
@@ -528,33 +531,23 @@ fn pressing_text(r: &ExploreRow, authored: Option<&str>) -> String {
 /// than one system rings for the heaviest it declares -- three classes
 /// cannot say more than that, and saying "flat" would be the one answer
 /// that is wrong.
-fn ring_of(prog: Progression) -> Option<f32> {
-    match prog {
-        Progression::Flat => None,
-        Progression::Martingale
-        | Progression::GrandMartingale
-        | Progression::DAlembert
-        | Progression::Fibonacci
-        | Progression::OscarsGrind => Some(2.0),
-        _ => Some(1.0),
+fn row_ring(r: &ExploreRow, authored: Option<&Pressing>) -> Option<f32> {
+    let class = if r.strategy_idx == craps_engine::AUTHORED_STRATEGY {
+        authored?.class()
+    } else {
+        PressClass::of(r.progression)
+    };
+    match class {
+        PressClass::Flat => None,
+        PressClass::Positive => Some(1.0),
+        PressClass::Chase => Some(2.0),
     }
-}
-
-fn row_ring(r: &ExploreRow, declared: Option<&[Progression]>) -> Option<f32> {
-    if r.strategy_idx == craps_engine::AUTHORED_STRATEGY {
-        let declared = declared?;
-        return declared
-            .iter()
-            .filter_map(|p| ring_of(*p))
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    }
-    ring_of(r.progression)
 }
 
 /// The authored strategy's own pressing phrase, when it can be trusted to
 /// belong to the rows on screen.
-fn authored_pressing(app: &App, cfg: &crate::config::SimConfig) -> Option<String> {
-    Some(authored_program(app, cfg)?.pressing_label())
+fn authored_pressing(app: &App, cfg: &crate::config::SimConfig) -> Option<Pressing> {
+    Some(authored_program(app, cfg)?.pressing())
 }
 
 /// The compiled program behind the rows on screen, when the one in hand is
@@ -740,13 +733,7 @@ fn leaderboard(
                 let cells: [(f32, String); 9] = [
                     (0.0, rank_text),
                     (34.0, r.strategy.chars().take(30).collect()),
-                    (
-                        258.0,
-                        pressing_text(r, authored.as_deref())
-                            .chars()
-                            .take(20)
-                            .collect(),
-                    ),
+                    (258.0, pressing_text(r, authored.as_ref(), true)),
                     (392.0, quit_label(r.quit)),
                     (486.0, numerals::prob_ci(r.p_double, r.p_double_ci)),
                     (586.0, numerals::prob_ci(r.p_ahead, r.p_ahead_ci)),
@@ -876,7 +863,7 @@ fn leaderboard(
                             for r in sorted.iter() {
                                 for text in [
                                     r.strategy.to_owned(),
-                                    pressing_text(r, authored.as_deref()),
+                                    pressing_text(r, authored.as_ref(), false),
                                     quit_label(r.quit),
                                     rank.fmt(r),
                                 ] {
@@ -920,50 +907,64 @@ mod pressing_tests {
         }
     }
 
+    fn press_by_rules() -> Pressing {
+        Pressing {
+            rule_raises: true,
+            ..Default::default()
+        }
+    }
+
     /// A curated row's progression is a real choice and prints as itself.
-    /// An authored row's is a pin -- the explorer enters the strategy at
+    /// An authored row's is a pin -- the Explorer enters the strategy at
     /// `Flat` because it does not cross it with the twelve -- and printing
     /// that pin claimed every written strategy pressed nothing.
     #[test]
     fn the_authored_row_never_prints_the_pin() {
         let curated = row(3, Progression::Martingale);
-        assert_eq!(pressing_text(&curated, None), "Martingale");
-        assert_eq!(pressing_text(&curated, Some("ignored")), "Martingale");
+        assert_eq!(pressing_text(&curated, None, false), "Martingale");
+        assert_eq!(
+            pressing_text(&curated, Some(&press_by_rules()), true),
+            "Martingale"
+        );
 
         let authored = row(craps_engine::AUTHORED_STRATEGY, Progression::Flat);
         assert_eq!(
-            pressing_text(&authored, Some("Martingale on some bets")),
-            "Martingale on some bets"
+            pressing_text(&authored, Some(&press_by_rules()), false),
+            "Pressed by its rules"
         );
-        assert_eq!(pressing_text(&authored, None), "as written");
-        assert_ne!(pressing_text(&authored, None), Progression::Flat.label());
+        assert_eq!(
+            pressing_text(&authored, Some(&press_by_rules()), true),
+            "Pressed by rules"
+        );
+        assert_eq!(pressing_text(&authored, None, false), "as written");
+        assert_ne!(
+            pressing_text(&authored, Some(&press_by_rules()), true),
+            Progression::Flat.label()
+        );
     }
 
     /// The dot ring is a pressing class, and the authored row's progression
     /// is a placeholder, so the ring must come from what the strategy
-    /// declares. Ringless is the legend's word for flat -- the one answer
-    /// that is wrong for a strategy that presses.
+    /// actually does. Ringless is the legend's word for flat.
     #[test]
-    fn the_authored_dot_rings_for_what_it_declares() {
-        let curated_flat = row(3, Progression::Flat);
-        let curated_chase = row(3, Progression::Martingale);
-        assert_eq!(row_ring(&curated_flat, None), None);
-        assert_eq!(row_ring(&curated_chase, None), Some(2.0));
+    fn the_authored_dot_rings_for_what_it_does() {
+        assert_eq!(row_ring(&row(3, Progression::Flat), None), None);
+        assert_eq!(row_ring(&row(3, Progression::Martingale), None), Some(2.0));
+        assert_eq!(row_ring(&row(3, Progression::HalfPress), None), Some(1.0));
 
         let authored = row(craps_engine::AUTHORED_STRATEGY, Progression::Flat);
-        assert_eq!(row_ring(&authored, Some(&[])), None, "declares nothing");
-        assert_eq!(
-            row_ring(&authored, Some(&[Progression::HalfPress])),
-            Some(1.0)
-        );
-        // The heaviest wins: a strategy that chases anywhere is a chaser.
-        assert_eq!(
-            row_ring(
-                &authored,
-                Some(&[Progression::HalfPress, Progression::Martingale])
-            ),
-            Some(2.0)
-        );
+        assert_eq!(row_ring(&authored, Some(&Pressing::default())), None);
+        assert_eq!(row_ring(&authored, Some(&press_by_rules())), Some(1.0));
+
+        // A rule that presses after a loss is a chase however the row is
+        // pinned, and that is the whole point of reading the op stream.
+        let chaser = Pressing {
+            rule_raises: true,
+            rule_raises_after_loss: true,
+            ..Default::default()
+        };
+        assert_eq!(row_ring(&authored, Some(&chaser)), Some(2.0));
+
         // Unknowable is not the same as flat, but three classes cannot say
         // so; the tooltip carries the words in that case.
         assert_eq!(row_ring(&authored, None), None);
