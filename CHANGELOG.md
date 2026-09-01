@@ -5,6 +5,45 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] - 2026-09-01
+
+Closes the audit 0.5.2 left open: Explorer and Duel had not been checked
+against a strategy run.
+
+### Fixed
+
+- **The Explorer called a written strategy flat.** A strategy is entered as
+  four rows pinned to `Progression::Flat` — deliberately, because the
+  Explorer does not cross a written strategy with the twelve progressions,
+  and the engine has a test holding it to that. The pin is a placeholder, not
+  a reading, and four places rendered it: the dot tooltip, the results table,
+  the copied text, and the dot's ring, which encodes pressing class and drew
+  nothing at all — the legend's word for flat. A strategy that Martingales
+  its don't pass was described, four ways, as pressing nothing. It was the
+  same sentence the Findings histogram carried until 0.5.2, in a screen the
+  0.5.2 notes listed as unaudited.
+
+  The three text sites now ask the strategy, and say "as written" when the
+  compiled program in hand cannot be proved to be the one that produced the
+  rows. The ring is classified from what the strategy declares, ringing for
+  the heaviest system it declares: three classes cannot say more than that,
+  and "flat" was the one answer that was wrong.
+
+### Audited, no change
+
+- **Duel was already correct.** It hands an authored side an explicitly empty
+  selection and the compiled program, omits the progression from the combo
+  name rather than printing a placeholder, and reports no per-dollar edge
+  because a rule set has no closed form — which is the spec's own rule about
+  not drawing a fabricated analytic line.
+- Neither screen reads the bet rail's selection at all, which was the defect
+  behind all six of the 0.5.2 fixes.
+
+### Added
+
+- `Program::declared_pressing`, the structured form behind
+  `Program::pressing_label`, for callers that classify rather than print.
+
 ## [0.5.2] - 2026-08-31
 
 ### Fixed
