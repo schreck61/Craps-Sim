@@ -244,6 +244,24 @@ impl Program {
         self.ops.len()
     }
 
+    /// The distinct non-flat pressing systems this strategy declares, in
+    /// stream order. Empty when it declares none.
+    ///
+    /// Callers that need to classify rather than print use this: the
+    /// Explorer's dot ring is a pressing class, and it drew the authored
+    /// strategy ringless -- its legend's word for "flat" -- because the row
+    /// carries a placeholder progression rather than a reading.
+    pub fn declared_pressing(&self) -> Vec<crate::bets::Progression> {
+        use crate::bets::Progression;
+        let mut seen: Vec<Progression> = Vec::new();
+        for p in self.progressions.iter() {
+            if *p != Progression::Flat && !seen.contains(p) {
+                seen.push(*p);
+            }
+        }
+        seen
+    }
+
     /// How this strategy presses, in one phrase, for a caption.
     ///
     /// There may be no single answer: pressing is declared per bet stream,
@@ -258,13 +276,7 @@ impl Program {
     /// phrase over a histogram could summarize a conditional ladder
     /// honestly — so the wording says which question it answered.
     pub fn pressing_label(&self) -> String {
-        use crate::bets::Progression;
-        let mut seen: Vec<Progression> = Vec::new();
-        for p in self.progressions.iter() {
-            if *p != Progression::Flat && !seen.contains(p) {
-                seen.push(*p);
-            }
-        }
+        let seen = self.declared_pressing();
         match seen.len() {
             0 => "Flat (no press declared)".to_owned(),
             1 => {

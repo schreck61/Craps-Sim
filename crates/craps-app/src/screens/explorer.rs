@@ -286,7 +286,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
             });
 
-            strip_of_combos(app, ui, mi, *min_cents, rows, rank);
+            strip_of_combos(app, ui, mi, *min_cents, rows, rank, &st.config);
             leaderboard(app, ui, mi, *min_cents, rows, rank, &st.config);
         }
         ui.add_space(8.0);
@@ -317,8 +317,12 @@ fn strip_of_combos(
     min_cents: i64,
     rows: &[ExploreRow],
     rank: RankBy,
+    cfg: &crate::config::SimConfig,
 ) {
     let t = app.theme.clone();
+    let authored_press = authored_pressing(app, cfg);
+    let authored_declared: Option<Vec<Progression>> =
+        authored_program(app, cfg).map(|p| p.declared_pressing());
     let dt = ui.input(|i| i.stable_dt.min(0.1));
     let morph = app.motion.duration(crate::ui::motion::MORPH);
     let id = egui::Id::new(("strip", mi));
@@ -392,7 +396,8 @@ fn strip_of_combos(
                 let is_sel = selected.0 == Some(key) || selected.1 == Some(key);
                 // Shape by quit rule: circle none, square 1.5×, diamond 2×,
                 // triangle 3×; ring style by pressing class.
-                draw_combo_dot(cx, Pos2::new(x, y), hue, r.quit_idx, r.progression, is_sel);
+                let ring = row_ring(r, authored_declared.as_deref());
+                draw_combo_dot(cx, Pos2::new(x, y), hue, r.quit_idx, ring, is_sel);
 
                 if let Some(p) = pointer {
                     let d2 = (p.x - x).powi(2) + (p.y - y).powi(2);
@@ -413,7 +418,7 @@ fn strip_of_combos(
                     format!(
                         "{} · {} · {} — {}",
                         r.strategy,
-                        r.progression.label(),
+                        pressing_text(r, authored_press.as_deref()),
                         quit_label(r.quit),
                         rank.fmt(r)
                     ),
@@ -446,7 +451,7 @@ fn draw_combo_dot(
     pos: Pos2,
     hue: Color32,
     quit_idx: u8,
-    prog: Progression,
+    ring: Option<f32>,
     selected: bool,
 ) {
     let t = cx.theme;
@@ -482,16 +487,6 @@ fn draw_combo_dot(
             );
         }
     }
-    // Ring = pressing class: none (flat), thin (positive), double (chase).
-    let ring = match prog {
-        Progression::Flat => None,
-        Progression::Martingale
-        | Progression::GrandMartingale
-        | Progression::DAlembert
-        | Progression::Fibonacci
-        | Progression::OscarsGrind => Some(2.0),
-        _ => Some(1.0),
-    };
     if let Some(w) = ring {
         cx.shape(
             Layer::Data,
@@ -504,6 +499,73 @@ fn draw_combo_dot(
             egui::Shape::circle_stroke(pos, r + 4.0, Stroke::new(1.0, t.blue)),
         );
     }
+}
+
+/// What the pressing column may say about a row.
+///
+/// The authored strategy is entered pinned to `Progression::Flat`, and that
+/// pin is a placeholder rather than a reading: the explorer deliberately
+/// does not cross a written strategy with the twelve progressions, because
+/// a strategy declares its own pressing per bet stream. Printed raw the pin
+/// said "Flat (no press)" over a strategy that may well Martingale its
+/// don't pass -- the same sentence the Findings histogram used to carry.
+///
+/// `authored` is the strategy's own answer when the compiled program in
+/// hand is the one that produced these rows; without it the honest word is
+/// that the pressing is written down elsewhere, never the pin.
+fn pressing_text(r: &ExploreRow, authored: Option<&str>) -> String {
+    if r.strategy_idx == craps_engine::AUTHORED_STRATEGY {
+        return authored.unwrap_or("as written").to_owned();
+    }
+    r.progression.label().to_owned()
+}
+
+/// Ring = pressing class: none (flat), thin (positive), double (chase).
+///
+/// Taken from the row's progression for a curated combo, where it is a real
+/// choice, and from what the strategy declares for an authored one, where
+/// the row's progression is only a placeholder. A strategy declaring more
+/// than one system rings for the heaviest it declares -- three classes
+/// cannot say more than that, and saying "flat" would be the one answer
+/// that is wrong.
+fn ring_of(prog: Progression) -> Option<f32> {
+    match prog {
+        Progression::Flat => None,
+        Progression::Martingale
+        | Progression::GrandMartingale
+        | Progression::DAlembert
+        | Progression::Fibonacci
+        | Progression::OscarsGrind => Some(2.0),
+        _ => Some(1.0),
+    }
+}
+
+fn row_ring(r: &ExploreRow, declared: Option<&[Progression]>) -> Option<f32> {
+    if r.strategy_idx == craps_engine::AUTHORED_STRATEGY {
+        let declared = declared?;
+        return declared
+            .iter()
+            .filter_map(|p| ring_of(*p))
+            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    }
+    ring_of(r.progression)
+}
+
+/// The authored strategy's own pressing phrase, when it can be trusted to
+/// belong to the rows on screen.
+fn authored_pressing(app: &App, cfg: &crate::config::SimConfig) -> Option<String> {
+    Some(authored_program(app, cfg)?.pressing_label())
+}
+
+/// The compiled program behind the rows on screen, when the one in hand is
+/// provably it.
+fn authored_program(
+    app: &App,
+    cfg: &crate::config::SimConfig,
+) -> Option<std::sync::Arc<craps_engine::strategy::Program>> {
+    let ran = cfg.strategy.as_ref()?;
+    let prog = app.live_program()?;
+    (crate::config::StrategyRef::of(&prog).hash == ran.hash).then_some(prog)
 }
 
 /// An 11-hue categorical ramp reserved to this screen, lightness-varied.
@@ -580,6 +642,7 @@ fn leaderboard(
     cfg: &crate::config::SimConfig,
 ) {
     let t = app.theme.clone();
+    let authored = authored_pressing(app, cfg);
     let mut sorted: Vec<&ExploreRow> = rows.iter().collect();
     sorted.sort_by(|a, b| {
         rank.key(b)
@@ -677,7 +740,13 @@ fn leaderboard(
                 let cells: [(f32, String); 9] = [
                     (0.0, rank_text),
                     (34.0, r.strategy.chars().take(30).collect()),
-                    (258.0, r.progression.label().to_owned()),
+                    (
+                        258.0,
+                        pressing_text(r, authored.as_deref())
+                            .chars()
+                            .take(20)
+                            .collect(),
+                    ),
                     (392.0, quit_label(r.quit)),
                     (486.0, numerals::prob_ci(r.p_double, r.p_double_ci)),
                     (586.0, numerals::prob_ci(r.p_ahead, r.p_ahead_ci)),
@@ -807,7 +876,7 @@ fn leaderboard(
                             for r in sorted.iter() {
                                 for text in [
                                     r.strategy.to_owned(),
-                                    r.progression.label().to_owned(),
+                                    pressing_text(r, authored.as_deref()),
                                     quit_label(r.quit),
                                     rank.fmt(r),
                                 ] {
@@ -822,5 +891,81 @@ fn leaderboard(
                         });
                 });
         }
+    }
+}
+
+#[cfg(test)]
+mod pressing_tests {
+    use super::*;
+
+    fn row(idx: u16, p: Progression) -> ExploreRow {
+        ExploreRow {
+            strategy_idx: idx,
+            strategy: "x",
+            progression: p,
+            quit_idx: 0,
+            quit: None,
+            p_double: 0.0,
+            p_double_ci: 0.0,
+            p_ahead: 0.0,
+            p_ahead_ci: 0.0,
+            p_nobust: 0.0,
+            p_nobust_ci: 0.0,
+            median_final: 0,
+            median_final_ci: (0, 0),
+            mean_final: 0.0,
+            mean_final_ci: 0.0,
+            median_rolls: 0,
+            sessions: 0,
+        }
+    }
+
+    /// A curated row's progression is a real choice and prints as itself.
+    /// An authored row's is a pin -- the explorer enters the strategy at
+    /// `Flat` because it does not cross it with the twelve -- and printing
+    /// that pin claimed every written strategy pressed nothing.
+    #[test]
+    fn the_authored_row_never_prints_the_pin() {
+        let curated = row(3, Progression::Martingale);
+        assert_eq!(pressing_text(&curated, None), "Martingale");
+        assert_eq!(pressing_text(&curated, Some("ignored")), "Martingale");
+
+        let authored = row(craps_engine::AUTHORED_STRATEGY, Progression::Flat);
+        assert_eq!(
+            pressing_text(&authored, Some("Martingale on some bets")),
+            "Martingale on some bets"
+        );
+        assert_eq!(pressing_text(&authored, None), "as written");
+        assert_ne!(pressing_text(&authored, None), Progression::Flat.label());
+    }
+
+    /// The dot ring is a pressing class, and the authored row's progression
+    /// is a placeholder, so the ring must come from what the strategy
+    /// declares. Ringless is the legend's word for flat -- the one answer
+    /// that is wrong for a strategy that presses.
+    #[test]
+    fn the_authored_dot_rings_for_what_it_declares() {
+        let curated_flat = row(3, Progression::Flat);
+        let curated_chase = row(3, Progression::Martingale);
+        assert_eq!(row_ring(&curated_flat, None), None);
+        assert_eq!(row_ring(&curated_chase, None), Some(2.0));
+
+        let authored = row(craps_engine::AUTHORED_STRATEGY, Progression::Flat);
+        assert_eq!(row_ring(&authored, Some(&[])), None, "declares nothing");
+        assert_eq!(
+            row_ring(&authored, Some(&[Progression::HalfPress])),
+            Some(1.0)
+        );
+        // The heaviest wins: a strategy that chases anywhere is a chaser.
+        assert_eq!(
+            row_ring(
+                &authored,
+                Some(&[Progression::HalfPress, Progression::Martingale])
+            ),
+            Some(2.0)
+        );
+        // Unknowable is not the same as flat, but three classes cannot say
+        // so; the tooltip carries the words in that case.
+        assert_eq!(row_ring(&authored, None), None);
     }
 }
