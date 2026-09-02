@@ -5,6 +5,62 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.4] - 2026-09-01
+
+Closes the last gap 0.5.2 and 0.5.3 both recorded rather than fixed: pressing
+was reported from the `press` declarations alone.
+
+### Fixed
+
+- **A strategy that pressed from its rules was called flat.** The language
+  changes a stake two ways and draws the line itself — a `press <system>`
+  declaration, applied per bet stream where the bet resolves, and a `press`
+  or `regress` inside a rule, applied at a decision point. Only the first was
+  read, so a ladder built out of rules reported "Flat (no press declared)"
+  wherever it was described. "Press twice, then collect" — a shipped example
+  whose name says what it does — described itself that way.
+
+  `Program::pressing` now reads both. The declarations come from the stream
+  table; the rules come from the compiled op stream, where rules are laid out
+  in order and each begins with exactly one `Op::Rule`, so a single linear
+  walk attributes every `Press` and `Regress` to the trigger it sits under.
+  `bet` does not count, being idempotent on a bet already up, and topping
+  odds is not pressing the flat behind them.
+
+- **A rule-driven chase rang as nothing at all.** Reading the trigger settles
+  the one classification worth settling without deeper analysis: raising a
+  stake because that bet just lost is the Martingale shape, whatever the
+  strategy is called. The Explorer's dot ring now shows that. A press under
+  any other trigger is reported as a positive progression rather than guessed
+  at.
+
+- **"Flat (no press)" is a claim again rather than a hedge.** Both sources
+  are counted, so the "declared" qualifier 0.5.2 added for honesty is no
+  longer needed and is gone.
+
+### Changed
+
+- `Pressing` replaces `Program::declared_pressing` as the reported form. It
+  is data rather than prose, so the Explorer's glyph and a chart's caption
+  cannot disagree about the same strategy, and `PressClass::of` gives the
+  chase set one definition instead of two copies. `Pressing::label` is the
+  full phrase; `Pressing::short` fits the Explorer leaderboard's twenty
+  characters, saying less but never anything different — the combined case
+  names its two sources rather than being cut off inside "Reverse
+  D'Alembert".
+
+- Lowering a stake is a movement but it is not pressing, so a regress-only
+  strategy keeps a flat glyph while its label says what it does. Three ring
+  classes cannot express a negative progression, and the words carry the
+  rest.
+
+### Known gaps
+
+- A press guarded by a condition rather than a trigger —
+  `on roll when streak(pass) < 0: press ...` — is a chase the trigger cannot
+  reveal, and reports as a positive progression. Reading fused guards is an
+  analysis pass rather than a walk.
+
 ## [0.5.3] - 2026-09-01
 
 Closes the audit 0.5.2 left open: Explorer and Duel had not been checked

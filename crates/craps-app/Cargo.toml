@@ -1,6 +1,6 @@
 [package]
 name = "craps-app"
-version = "0.5.3"
+version = "0.5.4"
 description = "Massively parallel Monte Carlo craps simulator with a GUI: bankroll survival, session distributions, and a strategy explorer"
 readme = "../../README.md"
 keywords = ["craps", "monte-carlo", "simulation", "gambling", "egui"]
