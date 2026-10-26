@@ -185,8 +185,11 @@ jobs:
       - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          # Mirrors deny.toml: ttf-parser is unmaintained but reaches us
-          # only through winit's Wayland titlebar path; no fix exists yet.
+          # Mirrors deny.toml -- keep both lists in step. ttf-parser is
+          # unmaintained but reaches us only through winit's Wayland titlebar
+          # path; the three zbus-family crates were folded into zbus 6.0 and
+          # reach us only through accesskit_unix and ashpd, neither of which
+          # has released a zbus 6 upgrade. No fix exists for any of them yet.
           # (Un-ignored warnings also make the action file issues, which
           # this job has no permission to do.)
-          ignore: RUSTSEC-2026-0192
+          ignore: RUSTSEC-2026-0192,RUSTSEC-2026-0370,RUSTSEC-2026-0371,RUSTSEC-2026-0372

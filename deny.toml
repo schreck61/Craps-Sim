@@ -27,4 +27,15 @@ ignore = [
     # winit → sctk-adwaita → ab_glyph (Wayland titlebar rendering).
     # No fixed upgrade exists yet — drop this when winit moves off it.
     "RUSTSEC-2026-0192",
+    # zvariant, zvariant_derive and zbus_names were folded into zbus 6.0 and
+    # are unmaintained as standalone crates. All three are Linux-only and
+    # reach us transitively, by two paths: eframe → egui-winit →
+    # accesskit_unix (AT-SPI screen reader support) and rfd → ashpd (XDG
+    # portal file dialogs). None is a vulnerability. As of 2026-10-26 no
+    # released version of accesskit_unix, atspi or ashpd has moved to
+    # zbus 6 — every one still requires zbus ^5, which pulls these in.
+    # Drop these once our upstreams upgrade.
+    "RUSTSEC-2026-0370", # zvariant
+    "RUSTSEC-2026-0371", # zbus_names
+    "RUSTSEC-2026-0372", # zvariant_derive
 ]
