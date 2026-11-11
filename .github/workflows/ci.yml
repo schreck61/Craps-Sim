@@ -6,7 +6,8 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    # Weekly advisory sweep so new RustSec advisories surface without a push.
+    # Weekly advisory sweep so a new RustSec advisory fails the build without
+    # waiting for someone to push.
     - cron: "0 6 * * 1"
 
 permissions:
@@ -161,7 +162,12 @@ jobs:
         run: cargo check --workspace --locked --release
 
   deny:
-    name: License policy
+    # Licences and advisories are both cargo-deny checks, and the slowest
+    # thing in either one is building cargo-deny itself, so they share a job
+    # and one install. The advisories step still runs when the licence step
+    # fails, so a single run reports both rather than hiding the second
+    # behind the first.
+    name: Licenses and advisories
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -173,29 +179,10 @@ jobs:
         run: cargo install cargo-deny --locked
       - name: Check dependency licenses
         run: cargo deny check licenses
-
-  audit:
-    name: Dependency advisories
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      checks: write # audit-check posts its report as a check run
-      # Only on a schedule event does the action report by filing an issue
-      # (one per advisory, skipped when its id is already named in an issue
-      # or PR) instead of a check run; without this the sweep dies on a 403.
-      issues: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          # Mirrors deny.toml -- keep both lists in step. ttf-parser is
-          # unmaintained but reaches us only through winit's Wayland titlebar
-          # path; the three zbus-family crates were folded into zbus 6.0 and
-          # reach us only through accesskit_unix and ashpd, neither of which
-          # has released a zbus 6 upgrade. No fix exists for any of them yet.
-          # Keeping the list current still matters, in the other direction:
-          # the scheduled run files an un-ignored warning as an issue and
-          # still exits green, so that issue is the only signal a genuinely
-          # new advisory has appeared.
-          ignore: RUSTSEC-2026-0192,RUSTSEC-2026-0370,RUSTSEC-2026-0371,RUSTSEC-2026-0372
+      - name: Check dependency advisories
+        # Reads its ignore list from deny.toml, where the reasoning for each
+        # id lives, so there is no second copy of that list here for a human
+        # to keep in step. Reports by exiting non-zero, which is why this job
+        # needs no token permissions beyond the workflow-wide contents: read.
+        if: ${{ !cancelled() }}
+        run: cargo deny check advisories
