@@ -1,5 +1,7 @@
 # cargo-deny configuration (https://embarkstudios.github.io/cargo-deny/).
-# Checked in CI: every license in the dependency graph must be on this list.
+# Both sections are checked in CI, in one job, a step each: every license in
+# the dependency graph must be on the list below, and no crate may carry an
+# advisory or be yanked unless it is named here with the reason why.
 
 [licenses]
 allow = [
@@ -22,6 +24,29 @@ allow = [
 ]
 
 [advisories]
+# A new advisory has to turn the build red. That is the whole point of the
+# weekly sweep, and it is the thing the rustsec/audit-check action could not
+# do: on a `schedule` event it reported by filing an issue and then returned
+# without failing, so a new advisory produced a green run plus an issue and
+# never a red build. This check just exits non-zero.
+#
+# Both scopes are set explicitly rather than left to cargo-deny's defaults.
+# `unmaintained` already defaults to "all", but every id ignored below is a
+# transitive unmaintained advisory, so the value is load-bearing here and
+# should not be able to change under us in a cargo-deny release. `unsound`
+# defaults to "workspace", which would quietly narrow the check to our own
+# crates -- that is, to nothing, since everything we ever see is in a
+# dependency.
+unmaintained = "all"
+unsound = "all"
+# Yanked dependencies fail too. audit-check hard-coded a skip for these
+# ("was yanked, but no issue will be reported about it"), which is how
+# async-executor 1.14.0 sat in the lockfile through a green weekly sweep.
+# When the registry index cannot be queried cargo-deny downgrades this to a
+# warning and stays green, so a registry hiccup cannot redden CI on its own.
+yanked = "deny"
+# Every id below is reported as `advisory-not-detected` once it stops matching
+# anything in the tree, so this list says when it is ready to be pruned.
 ignore = [
     # ttf-parser is unmaintained; it reaches us only through
     # winit → sctk-adwaita → ab_glyph (Wayland titlebar rendering).
